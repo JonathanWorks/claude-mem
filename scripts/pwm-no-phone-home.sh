@@ -19,7 +19,7 @@
 #   SHIPPED  everything installed or published: the plugin, the hub, the integrations, and every
 #            path in package.json "files". No vendor host, telemetry SDK, hosted-plan or upsell text.
 #   SOURCE   src/ (it builds dist/ and keeps unreachable hosted-plan code paths): no vendor
-#            endpoint of any shape. Tests in src/ are skipped.
+#            endpoint of any shape.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -34,17 +34,28 @@ fi
 SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install)
 # Everything npm publishes, except dist/ (built from src/, which the SOURCE tier covers).
 command -v node >/dev/null || { echo "FAIL: node is required to read package.json files" >&2; exit 2; }
-files_list="$(node -e 'const f = require("./package.json").files; if (!Array.isArray(f) || f.length === 0) process.exit(3); for (const e of f) console.log(e)')" ||
+# package.json itself ships (its scripts run at install), and so do its main/bin/exports targets.
+files_list="$(node -e '
+const p = require("./package.json");
+if (!Array.isArray(p.files) || p.files.length === 0) process.exit(3);
+const out = new Set(["package.json", ...p.files]);
+const add = (v) => {
+  if (typeof v === "string") out.add(v.replace(/^\.\//, "").replace(/\*.*$/, "").replace(/\/$/, "") || ".");
+  else if (v && typeof v === "object") Object.values(v).forEach(add);
+};
+add(p.main); add(p.bin); add(p.exports);
+for (const e of out) if (e && e !== "." && !e.startsWith("dist")) console.log(e);
+')" ||
   { echo "FAIL: could not read package.json \"files\"" >&2; exit 2; }
 while IFS= read -r entry; do
   [ -n "$entry" ] && [ "$entry" != "dist" ] && SHIPPED+=("$entry")
 done <<<"$files_list"
 
-SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
-SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|/gh/thedotmack|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
+SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack\.github\.io|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
+SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|/gh/thedotmack|thedotmack\.github\.io|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
 # Not code that ships: npm lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(':(exclude,glob)**/package-lock.json' ':(exclude)CHANGELOG.md')
-SOURCE_EXCLUDES=(':(exclude,glob)**/*.test.ts' ':(exclude,glob)**/*.test.tsx')
+SOURCE_EXCLUDES=()
 
 for entry in "${SHIPPED[@]}" src; do
   if [ -z "$(git ls-files -- "$entry" | head -1)" ]; then
@@ -76,7 +87,7 @@ scan() {
 }
 
 out_shipped=$(scan "$SHIPPED_PATTERN" "${SHIPPED[@]}" | sort -u) && shipped=0 || shipped=$?
-out_source=$(scan "$SOURCE_PATTERN" src "${SOURCE_EXCLUDES[@]}" | sort -u) && source=0 || source=$?
+out_source=$(scan "$SOURCE_PATTERN" src ${SOURCE_EXCLUDES[@]+"${SOURCE_EXCLUDES[@]}"} | sort -u) && source=0 || source=$?
 
 if [ "$shipped" -eq 2 ] || [ "$source" -eq 2 ]; then exit 2; fi
 hits=$(printf '%s\n' "$out_shipped" "$out_source" | sed '/^$/d')

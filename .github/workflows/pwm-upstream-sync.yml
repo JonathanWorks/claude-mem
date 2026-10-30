@@ -192,8 +192,14 @@ jobs:
           fi
           # package.json "files" sets what the guard scans; upstream may bump the version, not the list.
           files_of() { git show "$1:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.stringify(JSON.parse(s).files)))'; }
+          command -v node >/dev/null || { echo "node is required for the package.json check" >&2; exit 1; }
           if [ "$(files_of pwm)" != "$(files_of "$head")" ]; then
             echo "merged tree changes package.json \"files\" (the guard's scope); refusing to publish" >&2
+            title="Upstream $TAG changes package.json files"
+            existing="$(gh issue list --state open --search "in:title $TAG files" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1 || true)"
+            if [ -z "$existing" ]; then
+              gh issue create --title "$title" --body "Upstream $TAG changes the published file list, which is also the phone-home guard's scope. Review the new paths, merge by hand on a branch off pwm, and re-run the guard."
+            fi
             exit 1
           fi
           # The diff check above proves the merged tree's guard is byte-identical to ours.
