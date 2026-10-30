@@ -1476,3 +1476,14 @@ describe('a parsed URL is judged by its host (PWM fork)', () => {
     expect(SettingsDefaultsManager.isVendorEndpoint('https://api.cmem.ai./v1')).toBe(true);
   });
 });
+
+describe('fifth review cases (PWM fork)', () => {
+  it('does not split or reset free text in a non-endpoint key', () => {
+    expect(SettingsDefaultsManager.isVendorEndpoint('git status, curl https://cmem.ai/x', false)).toBe(false);
+  });
+  it('flags a scheme-less host:port in an endpoint key', () => {
+    expect(SettingsDefaultsManager.isVendorEndpoint('api.cmem.ai:443')).toBe(true);
+    expect(SettingsDefaultsManager.isVendorEndpoint('redis.cmem.ai:6379')).toBe(true);
+    expect(SettingsDefaultsManager.isVendorEndpoint('localhost:6379')).toBe(false);
+  });
+});

@@ -33,15 +33,18 @@ fi
 
 SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install)
 # Everything npm publishes, except dist/ (built from src/, which the SOURCE tier covers).
+command -v node >/dev/null || { echo "FAIL: node is required to read package.json files" >&2; exit 2; }
+files_list="$(node -e 'const f = require("./package.json").files; if (!Array.isArray(f) || f.length === 0) process.exit(3); for (const e of f) console.log(e)')" ||
+  { echo "FAIL: could not read package.json \"files\"" >&2; exit 2; }
 while IFS= read -r entry; do
   [ -n "$entry" ] && [ "$entry" != "dist" ] && SHIPPED+=("$entry")
-done < <(node -e 'for (const f of require("./package.json").files || []) console.log(f)')
+done <<<"$files_list"
 
 SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
-SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|api\.github\.com/repos/thedotmack|githubusercontent\.com/thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
-# Not code that ships: lockfile funding metadata and upstream's changelog of past releases.
-EXCLUDES=(':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/bun.lock' ':(exclude)CHANGELOG.md')
-SOURCE_EXCLUDES=(':(exclude,glob)**/*.test.*' ':(exclude,glob)**/__tests__/**')
+SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
+# Not code that ships: npm lockfile funding metadata and upstream's changelog of past releases.
+EXCLUDES=(':(exclude,glob)**/package-lock.json' ':(exclude)CHANGELOG.md')
+SOURCE_EXCLUDES=(':(exclude,glob)**/*.test.ts' ':(exclude,glob)**/*.test.tsx' ':(exclude,glob)**/__tests__/**')
 
 for entry in "${SHIPPED[@]}" src; do
   if [ -z "$(git ls-files -- "$entry" | head -1)" ]; then

@@ -722,12 +722,16 @@ export class SettingsDefaultsManager {
     const trimmed = value.trim();
     if (trimmed === '') return false;
     // A list value (comma or whitespace separated, e.g. ALLOWED_ORIGINS) is checked entry by entry.
-    const entries = trimmed.split(/[\s,]+/).filter(Boolean);
-    if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
+    if (endpoint) {
+      const entries = trimmed.split(/[\s,]+/).filter(Boolean);
+      if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
+    }
     try {
       // A value that parses as a URL is judged by its host alone (a lookalike host that merely
       // starts with the vendor name is not the vendor).
-      return this.VENDOR_HOST.test(new URL(trimmed).hostname.replace(/\.+$/, ''));
+      const host = new URL(trimmed).hostname.replace(/\.+$/, '');
+      // A scheme-less "host:port" parses with the host as its scheme and an empty hostname: fall through.
+      if (host !== '') return this.VENDOR_HOST.test(host);
     } catch {
       // Not a URL; the plain-text check below still applies to endpoint keys.
     }

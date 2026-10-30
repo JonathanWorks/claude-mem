@@ -23,7 +23,7 @@ describe('OpenRouter app identity', () => {
   // strands every token the existing entry (app id 2605040) has earned.
   // Deliberately no rank here — the daily rank moves and would rot.
   it('pins the app URL that owns the ranking', () => {
-    expect(OPENROUTER_APP_URL).toBe('https://github.com/thedotmack/claude-mem');
+    expect(OPENROUTER_APP_URL).toBe('https://github.com/JonathanWorks/claude-mem');
   });
 
   it('sends the title as the display name', () => {

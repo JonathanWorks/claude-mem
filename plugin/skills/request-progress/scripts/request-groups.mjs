@@ -1227,10 +1227,13 @@ var init_SettingsDefaultsManager = __esm({
       static isVendorEndpoint(value, endpoint = true) {
         const trimmed = value.trim();
         if (trimmed === "") return false;
-        const entries = trimmed.split(/[\s,]+/).filter(Boolean);
-        if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
+        if (endpoint) {
+          const entries = trimmed.split(/[\s,]+/).filter(Boolean);
+          if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
+        }
         try {
-          return this.VENDOR_HOST.test(new URL(trimmed).hostname.replace(/\.+$/, ""));
+          const host = new URL(trimmed).hostname.replace(/\.+$/, "");
+          if (host !== "") return this.VENDOR_HOST.test(host);
         } catch {
         }
         if (!endpoint) return false;

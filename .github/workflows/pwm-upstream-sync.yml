@@ -186,7 +186,7 @@ jobs:
           # verdict comes from re-running the guard here (it only runs git grep over the files).
           git merge-base --is-ancestor pwm "$head"
           git merge-base --is-ancestor "$TAG" "$head"
-          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh .gitattributes; then
+          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh .gitattributes package.json; then
             echo "merged tree changes our workflows or the guard; refusing to publish" >&2
             exit 1
           fi

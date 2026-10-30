@@ -556,7 +556,7 @@ run_openclaw() {
 }
 
 CLAUDE_MEM_REPO="https://github.com/JonathanWorks/claude-mem.git"
-CLAUDE_MEM_BRANCH="${CLI_BRANCH:-main}"
+CLAUDE_MEM_BRANCH="${CLI_BRANCH:-pwm}"
 PLUGIN_FRESHLY_INSTALLED=""
 
 resolve_extension_dir() {
