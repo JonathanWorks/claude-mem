@@ -64,13 +64,15 @@ ALLOWED_SYMLINKS=(
   "openclaw/skills/make-plan/SKILL.md=../../../plugin/skills/make-plan/SKILL.md"
 )
 while IFS= read -r -d '' record; do
-  case "$record" in 120000*) ;; *) continue ;; esac
+  case "$record" in 120000* | 160000*) ;; *) continue ;; esac
   link="${record#*$'\t'}"
   skip=0
   for entry in "${NOT_SHIPPED[@]}"; do
     case "$link" in "$entry" | "$entry"/*) skip=1 ;; esac
   done
   [ "$skip" = 1 ] && continue
+  # git grep does not enter submodules, so a shipped submodule is never allowed.
+  case "$record" in 160000*) echo "FAIL: shipped submodule is not scanned: $link" >&2; exit 2 ;; esac
   pair="$link=$(readlink "$link" 2>/dev/null || true)"
   allowed=0
   for ok in "${ALLOWED_SYMLINKS[@]}"; do [ "$pair" = "$ok" ] && allowed=1; done
