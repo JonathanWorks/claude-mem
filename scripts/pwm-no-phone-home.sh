@@ -32,23 +32,49 @@ if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$root" ]; then
   exit 2
 fi
 
-SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install
-  .codex-plugin .qoder-plugin .agents omp hermes ods pi dsh)
+# The shipped tier is EVERY tracked file except this explicit list of things that never ship
+# (development notes, tests, the vendor's dev metadata, CI). A new top-level folder is scanned by
+# default; it is never "safe because nobody listed it".
+NOT_SHIPPED=(src scripts tests docs plans workers evals fixtures .maestro .plan .agent-jobs .claude .github
+  CHANGELOG.md README.md SECURITY.md CLAUDE.md PWM-FORK.md WARP.md RECEIPT-JOIN.md bunfig.toml)
+not_shipped_specs=()
+for entry in "${NOT_SHIPPED[@]}"; do not_shipped_specs+=(":(exclude)$entry"); done
+SHIPPED=(. "${not_shipped_specs[@]}")
 command -v node >/dev/null || { echo "FAIL: node is required" >&2; exit 2; }
 command -v npm >/dev/null || { echo "FAIL: npm is required" >&2; exit 2; }
 
-SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack\.github\.io|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
+SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|github:thedotmack|:[[:space:]]*"thedotmack/claude-mem|thedotmack\.github\.io|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
 SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|/gh/thedotmack|thedotmack\.github\.io|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
 # Not code that ships: npm lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(':(exclude,glob)**/package-lock.json' ':(exclude)CHANGELOG.md')
 SOURCE_EXCLUDES=()
 
-for entry in "${SHIPPED[@]}" src scripts; do
+for entry in src scripts; do
   if [ -z "$(git ls-files -- "$entry" | head -1)" ]; then
     echo "FAIL: scope entry '$entry' has no tracked file; update the guard" >&2
     exit 2
   fi
 done
+
+# A tracked symlink is scanned only as its link text, so its target must itself be scanned: it has
+# to resolve inside the repository and outside the not-shipped list.
+while IFS= read -r link; do
+  [ -n "$link" ] || continue
+  skip=0
+  for entry in "${NOT_SHIPPED[@]}"; do
+    case "$link" in "$entry" | "$entry"/*) skip=1 ;; esac
+  done
+  [ "$skip" = 1 ] && continue
+  target="$(cd "$(dirname "$link")" && pwd -P)/$(readlink "$link")"
+  resolved="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)/$(basename "$target")" || resolved=""
+  case "$resolved" in
+  "$root"/*) rel="${resolved#"$root"/}" ;;
+  *) echo "FAIL: symlink $link points outside the repository" >&2; exit 2 ;;
+  esac
+  for entry in "${NOT_SHIPPED[@]}"; do
+    case "$rel" in "$entry" | "$entry"/*) echo "FAIL: symlink $link points into $entry, which the guard does not scan" >&2; exit 2 ;; esac
+  done
+done < <(git ls-files -s | awk '$1 == "120000" { sub(/^[^\t]*\t/, ""); print }')
 
 # One git grep pass; prints matches; returns 0 on matches, 1 when clean, 2+ on error.
 grep_pass() {
@@ -78,7 +104,7 @@ out_source=$(scan "$SOURCE_PATTERN" src scripts ':(exclude)scripts/pwm-no-phone-
 # What npm publishes is whatever `npm pack` says it is: the guard asks npm instead of re-deriving
 # its file selection. Built dist/ files (compiled from src/ and scripts/) get the endpoint pattern;
 # every other published file gets the full shipped pattern. Any npm or read failure fails closed.
-if node -e 'const p=require("./package.json"); process.exit(p.bundleDependencies || p.bundledDependencies || p.workspaces ? 0 : 1)'; then
+if node -e 'const p=require("./package.json"); const has = (v) => Array.isArray(v) ? v.length > 0 : Boolean(v); process.exit(has(p.bundleDependencies) || has(p.bundledDependencies) || has(p.workspaces) ? 0 : 1)'; then
   echo "FAIL: package.json declares bundled dependencies or workspaces; the guard cannot see what they ship" >&2
   exit 2
 fi
@@ -119,4 +145,4 @@ if [ "$shipped" -ne 0 ] || [ "$source" -ne 0 ] || [ "$packed" -ne 0 ]; then
   echo "FAIL: $(printf '%s\n' "$hits" | wc -l | tr -d ' ') phone-home / upsell reference(s) (run with --list for each one)"
   exit 1
 fi
-echo "OK: no phone-home or upsell references in ${#SHIPPED[@]} shipped folders or the npm package, and no vendor endpoint in src/ or scripts/"
+echo "OK: no phone-home or upsell references in shipped files or the npm package, and no vendor endpoint in src/ or scripts/"

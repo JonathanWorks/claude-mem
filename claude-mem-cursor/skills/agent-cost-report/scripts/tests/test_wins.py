@@ -125,8 +125,8 @@ class Build(Transcripts):
         self.assertEqual(set(block["items"][0]["sources"]), {"transcript", "ship_observation"}); self.assertEqual(block["items"][0]["evidence_ids"], [9])
 
     def test_observation_repo_from_remote_of_project_cwd(self):
-        block, _ = self.build([], self.ship(1), remote=lambda cwd: "thedotmack/claude-mem" if cwd == "/w/p" else None)
-        self.assertEqual(block["items"][0]["key"], "thedotmack/claude-mem#1")
+        block, _ = self.build([], self.ship(1), remote=lambda cwd: "JonathanWorks/claude-mem" if cwd == "/w/p" else None)
+        self.assertEqual(block["items"][0]["key"], "JonathanWorks/claude-mem#1")
         block, _ = self.build([], self.ship(1), remote=lambda cwd: None)
         self.assertEqual(block["items"][0]["key"], "claude-mem#1")
 
