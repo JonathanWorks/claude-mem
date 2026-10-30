@@ -11,6 +11,8 @@ export interface SyncApiEnv {
 	 * Normalized (no trailing slash). null = normal hub mode.
 	 */
 	FORWARD_ORIGIN: string | null;
+	/** PWM fork: JSON map of sha256(device token) -> user id; non-empty = verify tokens locally (local-verify.ts). */
+	LOCAL_TOKEN_SHA256: string;
 	PORT: number;
 	HOST: string;
 }
@@ -78,6 +80,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): SyncApiEnv {
 		INTERNAL_PROJECTOR_URL: (source.INTERNAL_PROJECTOR_URL ?? "").trim(),
 		CMEM_INTERNAL_PROJECTOR_SECRET: (source.CMEM_INTERNAL_PROJECTOR_SECRET ?? "").trim(),
 		FORWARD_ORIGIN: forwardOrigin,
+		LOCAL_TOKEN_SHA256: (source.LOCAL_TOKEN_SHA256 ?? "").trim(),
 		PORT: port,
 		HOST: (source.HOST ?? "0.0.0.0").trim() || "0.0.0.0",
 	};

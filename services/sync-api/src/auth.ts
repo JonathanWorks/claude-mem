@@ -9,6 +9,7 @@ import {
 	AUTH_CACHE_TTL_MIN_SECONDS,
 	type SyncApiEnv,
 } from "./env";
+import { localVerify, tokenTableFor } from "./local-verify";
 
 const encoder = new TextEncoder();
 
@@ -72,7 +73,7 @@ export function __resetAuthVerdictMemoryForTests(): void {
 	verdictMemory.clear();
 }
 
-export function defaultAuthDependencies(_env: SyncApiEnv): AuthDependencies {
+export function defaultAuthDependencies(env: SyncApiEnv): AuthDependencies {
 	return {
 		async readCachedVerdict(cacheKey) {
 			return readVerdictMemory(cacheKey) ? "1" : null;
@@ -84,7 +85,10 @@ export function defaultAuthDependencies(_env: SyncApiEnv): AuthDependencies {
 		async invalidateCachedVerdict(cacheKey) {
 			deleteVerdictMemory(cacheKey);
 		},
-		verifyToken: (request) => fetch(request),
+		// PWM fork: a self-hosted hub answers its own token check (local-verify.ts).
+		verifyToken: env.LOCAL_TOKEN_SHA256
+			? (request) => localVerify(request, tokenTableFor(env.LOCAL_TOKEN_SHA256))
+			: (request) => fetch(request),
 		logCacheFailure(operation, error) {
 			console.warn("sync-hub auth cache unavailable:", {
 				operation,
