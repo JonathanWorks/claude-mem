@@ -4,7 +4,7 @@
  *
  * Mirrors `parseStringListField` in `src/services/sync/string-list-field.ts`:
  * the viewer's tsconfig pins rootDir to this directory (see
- * `constants/promo.ts`), so it cannot import the Node-side module. Change both
+ * the viewer constants), so it cannot import the Node-side module. Change both
  * together.
  *
  * Same contract as the sync copy:

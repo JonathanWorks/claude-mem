@@ -16,7 +16,7 @@
  * and strands every token the old one earned. So APP_TITLE is safe to edit and
  * APP_URL is not — do not "tidy" it to the marketing domain.
  *
- * The cmem.ai Pro gateway sends these same values on the user's behalf when a
+ * The the hosted service Pro gateway sends these same values on the user's behalf when a
  * subscriber's traffic is proxied, so gateway and bring-your-own-key traffic
  * land under one entry (claude-mem-pro
  * src/app/api/inference/v1/chat/completions/route.ts).

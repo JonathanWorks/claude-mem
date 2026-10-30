@@ -3204,7 +3204,7 @@ export class SessionStore {
   /**
    * The id CloudSync syncs this device under, once it is resolved: work-state
    * reads order native rows as this device's writes, the way other devices
-   * and cmem.ai order them. Empty (the default) when sync has no device id.
+   * and the hosted service order them. Empty (the default) when sync has no device id.
    */
   setLocalSyncDeviceId(deviceId: string): void {
     this.localSyncDeviceId = deviceId;

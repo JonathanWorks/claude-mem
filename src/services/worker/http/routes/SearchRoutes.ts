@@ -48,8 +48,6 @@ import { isProjectExcluded } from '../../../../utils/project-filter.js';
 import type { ObservationSearchResult, SessionSummarySearchResult } from '../../../sqlite/types.js';
 import { captureEvent } from '../../../telemetry/telemetry.js';
 import { telemetryBuffer } from '../../../telemetry/buffer.js';
-import { proTrialLine } from '../../../../shared/pro-promo.js';
-import { teamBriefReserveChars } from '../../../../shared/teambrain.js';
 import { ProgressiveMemorySearch } from '../../ProgressiveMemorySearch.js';
 import { progressiveSearchToolResult, progressiveSearchToolError, type ProgressiveSearchInput } from '../../../../shared/progressive-search.js';
 
@@ -100,7 +98,6 @@ Memory injection starts on your second session in a project.
 \`/learn-codebase\` is available if the user wants to front-load the entire repo into memory in a single pass (~5 minutes on a typical repo, optional). Otherwise memory builds passively as work happens.
 
 Live activity: {viewer_url}
-{pro_trial_line}
 How it works: \`/how-it-works\`
 
 This message disappears once the first observation lands.
@@ -570,8 +567,7 @@ export class SearchRoutes extends BaseRouteHandler {
         const port = process.env.CLAUDE_MEM_WORKER_PORT ?? settings.CLAUDE_MEM_WORKER_PORT;
         const viewerUrl = getViewerBaseUrl(port);
         const hintBody = WELCOME_HINT_TEMPLATE
-          .replace('{viewer_url}', viewerUrl)
-          .replace('{pro_trial_line}', proTrialLine('welcome-hint'));
+          .replace('{viewer_url}', viewerUrl);
         // A project with zero observations is exactly where a failing observer
         // hides: without this the health warning (applied inside
         // generateContextWithStats) never reached the user this early-return serves.
@@ -593,13 +589,7 @@ export class SearchRoutes extends BaseRouteHandler {
       projects: projects,
       ...(platformSource ? { platformSource } : {}),
       full,
-      // Beside the work-state section: room for what the hook appends after
-      // this body once the install is in a team (the TeamBrain brief). Env
-      // first, as the hook reads it.
-      reserveChars: (workStateSection ? workStateSection.length + 2 : 0) + teamBriefReserveChars({
-        CLAUDE_MEM_TEAMBRAIN_URL: process.env.CLAUDE_MEM_TEAMBRAIN_URL ?? settings.CLAUDE_MEM_TEAMBRAIN_URL,
-        CLAUDE_MEM_MEMORY_INSTRUCTIONS_ENABLED: process.env.CLAUDE_MEM_MEMORY_INSTRUCTIONS_ENABLED ?? settings.CLAUDE_MEM_MEMORY_INSTRUCTIONS_ENABLED,
-      }),
+      reserveChars: workStateSection ? workStateSection.length + 2 : 0,
       timePlaceholders: true,
       includePriorMessage: request.includePriorMessage,
     }, forHuman, { execution: this.contextReader ? 'worker' : 'inline', reader: this.contextReader ?? undefined });

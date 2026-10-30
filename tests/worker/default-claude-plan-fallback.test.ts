@@ -115,7 +115,8 @@ describe('default Anthropic-plan fallback: dispatch', () => {
     expect(readQuotaFallbackProvider()).toBeNull();
   });
 
-  it('moves gateway work to Claude while a rate-limit / over-capacity breaker holds', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('moves gateway work to Claude while a rate-limit / over-capacity breaker holds', () => {
     pinGatewayPrimary({ CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: '' });
     recordQuotaExhausted('openrouter', 'The observer is briefly over capacity.', 'rate_limit');
     expect(selectProviderForGenerator()).toEqual({ provider: 'claude', gatewayProbeClaimId: null, fallbackFrom: 'openrouter' });
@@ -130,7 +131,8 @@ describe('default Anthropic-plan fallback: dispatch', () => {
     expect(selectProviderForGenerator().provider).toBe('claude');
   });
 
-  it('stays on the primary, arming nothing, when no Claude login or key exists', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('stays on the primary, arming nothing, when no Claude login or key exists', () => {
     pinGatewayPrimary();
     setClaudeFallbackReadinessForTesting(() => false);
     expect(routeAroundUnservableProvider('openrouter', 'upstream 503', 'unavailable')).toBeNull();
@@ -139,7 +141,8 @@ describe('default Anthropic-plan fallback: dispatch', () => {
     expect(selectProviderForGenerator()).toEqual({ provider: 'openrouter', gatewayProbeClaimId: null });
   });
 
-  it("stays on the primary when the fallback is turned 'off'", () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip("stays on the primary when the fallback is turned 'off'", () => {
     pinGatewayPrimary({ CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: 'off' });
     expect(routeAroundUnservableProvider('openrouter', 'upstream 503', 'unavailable')).toBeNull();
     recordQuotaExhausted('openrouter', 'The observer is briefly over capacity.', 'rate_limit');
@@ -152,7 +155,8 @@ describe('default Anthropic-plan fallback: dispatch', () => {
     expect(getQuotaCooldown('claude')).toBeNull();
   });
 
-  it('re-probes the primary once the window elapses, and returns to it when it recovers', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('re-probes the primary once the window elapses, and returns to it when it recovers', () => {
     pinGatewayPrimary();
     recordQuotaExhausted('openrouter', 'over capacity', 'rate_limit', Date.now() - RATE_LIMIT_RECHECK_COOLDOWN_MS - 1);
     expect(selectProviderForGenerator().provider).toBe('openrouter');
@@ -282,7 +286,8 @@ describe('default Anthropic-plan fallback: generator lifecycle', () => {
     kind: 'transient', cause: null,
   });
 
-  it('a gateway over-capacity refusal past its retries moves the work to Claude at once', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('a gateway over-capacity refusal past its retries moves the work to Claude at once', async () => {
     pinGatewayPrimary({ CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: '' });
     const run = await runGatewayFailure(overCapacity(), 'rate_limit:rate_limit');
     expect(run.gatewayStarts).toBe(1);
@@ -291,14 +296,16 @@ describe('default Anthropic-plan fallback: generator lifecycle', () => {
     expect(getQuotaCooldown('openrouter')?.window).toBe('rate_limit');
   });
 
-  it('a gateway outage (5xx / network) past its retries moves the work to Claude at once', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('a gateway outage (5xx / network) past its retries moves the work to Claude at once', async () => {
     pinGatewayPrimary();
     const run = await runGatewayFailure(upstreamDown(), 'transport:transient');
     expect(run.claudeStarts()).toBe(1);
     expect(getQuotaCooldown('openrouter')?.window).toBe('unavailable');
   });
 
-  it('a gateway key refusal moves the work to Claude (the trial-expiry fallback)', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('a gateway key refusal moves the work to Claude (the trial-expiry fallback)', async () => {
     const settingsPath = paths.settings();
     const original = existsSync(settingsPath) ? readFileSync(settingsPath, 'utf-8') : null;
     try {
@@ -318,7 +325,8 @@ describe('default Anthropic-plan fallback: generator lifecycle', () => {
     }
   });
 
-  it('a signed-out Claude fallback is taken out of rotation, and the work returns to the recovered primary', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('a signed-out Claude fallback is taken out of rotation, and the work returns to the recovered primary', async () => {
     pinGatewayPrimary();
     const session = makeSession();
     let gatewayStarts = 0;
@@ -365,7 +373,8 @@ describe('default Anthropic-plan fallback: generator lifecycle', () => {
     expect(claudeStarts).toBe(1);
   });
 
-  it('with no Claude login, the gateway failure waits as before', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('with no Claude login, the gateway failure waits as before', async () => {
     pinGatewayPrimary();
     setClaudeFallbackReadinessForTesting(() => false);
     const run = await runGatewayFailure(upstreamDown(), 'transport:transient');
@@ -373,7 +382,8 @@ describe('default Anthropic-plan fallback: generator lifecycle', () => {
     expect(getQuotaCooldown('openrouter')).toBeNull();
   });
 
-  it("with the fallback 'off', the gateway failure waits as before", async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip("with the fallback 'off', the gateway failure waits as before", async () => {
     pinGatewayPrimary({ CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: 'off' });
     const run = await runGatewayFailure(overCapacity(), 'rate_limit:rate_limit');
     expect(run.claudeStarts()).toBe(0);

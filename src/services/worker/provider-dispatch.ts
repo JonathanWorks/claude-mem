@@ -7,7 +7,7 @@
  * configured; else claude (silent fall-through, unchanged).
  *
  * Trial-expiry fallback (plan 2026-08-26 Phase 6): when the selected
- * openrouter config points at the cmem.ai gateway AND a terminal gateway
+ * openrouter config points at the hosted gateway AND a terminal gateway
  * rejection has been recorded (CLAUDE_MEM_PRO_FALLBACK_AT non-empty), dispatch
  * returns 'claude' during a cooldown — memory runs on the user's Anthropic
  * plan, as the installer promised. It then permits a periodic gateway probe

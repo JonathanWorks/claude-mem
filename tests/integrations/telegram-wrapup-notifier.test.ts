@@ -267,10 +267,9 @@ describe('Telegram wrap-up notifier', () => {
     const { sessionDbId, memorySessionId } = createSession('project-a', `content-provider-${shape}`);
     storeSummary(memorySessionId, 'project-a');
     const config = settings({
-      // The gateway only takes a cmem.ai memory key (a personal key is withheld).
-      CLAUDE_MEM_OPENROUTER_API_KEY: 'cm_pro_0123456789abcdef01234567',
-      CLAUDE_MEM_OPENROUTER_MODEL: 'cmem-observer',
-      CLAUDE_MEM_OPENROUTER_BASE_URL: 'https://cmem.ai/api/inference/v1',
+      CLAUDE_MEM_OPENROUTER_API_KEY: 'sk-or-v1-0123456789abcdef01234567',
+      CLAUDE_MEM_OPENROUTER_MODEL: 'deepseek/deepseek-v4-flash-0731',
+      CLAUDE_MEM_OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1',
       CLAUDE_MEM_TIER_SUMMARY_MODEL: '',
     });
     spyOn(SettingsDefaultsManager, 'loadFromFile').mockReturnValue(config);
@@ -301,9 +300,9 @@ describe('Telegram wrap-up notifier', () => {
 
     expect(inferenceFetch).toHaveBeenCalledTimes(1);
     const [url, request] = inferenceFetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://cmem.ai/api/inference/v1/chat/completions');
+    expect(url).toBe('https://openrouter.ai/api/v1/chat/completions');
     const body = JSON.parse(String(request.body));
-    expect(body.model).toBe('cmem-observer');
+    expect(body.model).toBe('deepseek/deepseek-v4-flash-0731');
     expect(body.max_tokens).toBe(4096);
     expect(body.response_format).toEqual({ type: 'text' });
     expect(body.reasoning).toEqual({ enabled: false });

@@ -13,7 +13,7 @@ export const RULE_TIERS: { tier: RuleTier; label: string }[] = [
 
 export const SAMPLE_RULE_SCOPES: RuleScope[] = [
   { id: 'everywhere', tier: 'everywhere', name: 'Everywhere' },
-  { id: 'cmem-cloud', tier: 'project', name: 'Hosted app' },
+  { id: 'hosted-app', tier: 'project', name: 'Hosted app' },
   { id: 'claude-mem', tier: 'project', name: 'claude-mem' },
   { id: 'frustrated', tier: 'situation', name: 'When I’m frustrated' },
   { id: 'designs', tier: 'situation', name: 'When reviewing designs' },
@@ -77,22 +77,22 @@ export const SAMPLE_OWNER_RULES: OwnerRule[] = [
     records: [{ kind: 'Review', label: 'request-progress · 4 requests showed it', at: 'Oct 20, 1:50 pm' }, { kind: 'Prompt', label: 'Claude Code · usage forecast', at: 'Oct 15, 10:51 pm' }] },
 
   // Hosted app: a replaced-rule chain stays visible (follow the latest model, then a pinned release, then a scheduled cheapest pick).
-  { id: 'model-cron', scopeId: 'cmem-cloud', setBy: 'owner', when: 'choosing the shared observer model', then: 'Let the scheduled check pick the cheapest suitable model. A manual choice lasts until the next check.', timesSeen: 3, latestAt: 'Oct 11', latestDaysAgo: 9, source: 'you', status: 'on',
+  { id: 'model-cron', scopeId: 'hosted-app', setBy: 'owner', when: 'choosing the shared observer model', then: 'Let the scheduled check pick the cheapest suitable model. A manual choice lasts until the next check.', timesSeen: 3, latestAt: 'Oct 11', latestDaysAgo: 9, source: 'you', status: 'on',
     quotes: [{ at: 'Oct 11 · CLAUDE.md', where: 'CLAUDE.md', kind: 'directive', quote: 'pick the lowest-priced suitable model on each scheduled check' }],
     records: [{ kind: 'Instructions', label: 'Project CLAUDE.md · Model policy', at: 'Oct 11' }, { kind: 'Prompt', label: 'Claude Code · model check', at: 'Oct 11' }] },
-  { id: 'model-0731', scopeId: 'cmem-cloud', setBy: 'owner', when: 'choosing the shared observer model', then: 'Pin one specific model release.', timesSeen: 2, latestAt: 'Oct 9', latestDaysAgo: 11, source: 'you', status: 'replaced', replacedBy: { ruleId: 'model-cron', at: 'Oct 11' },
+  { id: 'model-0731', scopeId: 'hosted-app', setBy: 'owner', when: 'choosing the shared observer model', then: 'Pin one specific model release.', timesSeen: 2, latestAt: 'Oct 9', latestDaysAgo: 11, source: 'you', status: 'replaced', replacedBy: { ruleId: 'model-cron', at: 'Oct 11' },
     quotes: [{ at: 'Oct 9 · CLAUDE.md', where: 'CLAUDE.md', kind: 'correction', quote: 'use this one release for now instead of always following the latest' }],
     records: [{ kind: 'Instructions', label: 'Project CLAUDE.md · Pinned release', at: 'Oct 9' }] },
-  { id: 'model-latest', scopeId: 'cmem-cloud', setBy: 'owner', when: 'choosing the shared observer model', then: 'Always follow the latest model release.', timesSeen: 3, latestAt: 'Oct 2', latestDaysAgo: 18, source: 'you', status: 'replaced', replacedBy: { ruleId: 'model-0731', at: 'Oct 9' },
+  { id: 'model-latest', scopeId: 'hosted-app', setBy: 'owner', when: 'choosing the shared observer model', then: 'Always follow the latest model release.', timesSeen: 3, latestAt: 'Oct 2', latestDaysAgo: 18, source: 'you', status: 'replaced', replacedBy: { ruleId: 'model-0731', at: 'Oct 9' },
     quotes: [{ at: 'Oct 2 · CLAUDE.md', where: 'CLAUDE.md', kind: 'directive', quote: 'always follow the latest release automatically' }],
     records: [{ kind: 'Instructions', label: 'Project CLAUDE.md · Latest model', at: 'Oct 2' }] },
-  { id: 'top-up', scopeId: 'cmem-cloud', setBy: 'owner', when: 'the provider balance runs out', then: 'Top up credits instead of rerouting traffic.', timesSeen: 2, latestAt: 'Oct 4', latestDaysAgo: 16, source: 'you', status: 'on',
+  { id: 'top-up', scopeId: 'hosted-app', setBy: 'owner', when: 'the provider balance runs out', then: 'Top up credits instead of rerouting traffic.', timesSeen: 2, latestAt: 'Oct 4', latestDaysAgo: 16, source: 'you', status: 'on',
     quotes: [{ at: 'Oct 4 · CLAUDE.md', where: 'CLAUDE.md', kind: 'correction', quote: 'An empty balance is fixed by topping up, not by changing the routing.' }],
     records: [{ kind: 'Instructions', label: 'Project CLAUDE.md · Provider rule', at: 'Oct 4' }] },
-  { id: 'pr-after-push', scopeId: 'cmem-cloud', setBy: 'owner', when: 'you push a finished change to a feature branch', then: 'Open a PR to main right away.', timesSeen: 3, latestAt: 'Oct 16', latestDaysAgo: 4, source: 'you', status: 'on',
+  { id: 'pr-after-push', scopeId: 'hosted-app', setBy: 'owner', when: 'you push a finished change to a feature branch', then: 'Open a PR to main right away.', timesSeen: 3, latestAt: 'Oct 16', latestDaysAgo: 4, source: 'you', status: 'on',
     quotes: [{ at: 'CLAUDE.md', where: 'CLAUDE.md', kind: 'directive', quote: 'Open the pull request as soon as the branch is pushed.' }],
     records: [{ kind: 'Instructions', label: 'Project CLAUDE.md', at: 'Oct 9' }] },
-  { id: 'money', scopeId: 'cmem-cloud', setBy: 'learned', when: 'you report on cloud sync', then: 'Say first whether sync is healthy for everyone.', timesSeen: 3, latestAt: 'Oct 15', latestDaysAgo: 5, source: 'owner-goals', status: 'suggested',
+  { id: 'money', scopeId: 'hosted-app', setBy: 'learned', when: 'you report on cloud sync', then: 'Say first whether sync is healthy for everyone.', timesSeen: 3, latestAt: 'Oct 15', latestDaysAgo: 5, source: 'owner-goals', status: 'suggested',
     quotes: [{ at: 'Oct 15, 8:49 pm', where: 'prompt', kind: 'directive', quote: 'what i need to know is whether sync is healthy for everyone' }],
     records: [{ kind: 'Goals run', label: 'owner-goals · “Make cloud sync dependable”', at: 'Oct 20, 11:02 am' }] },
 

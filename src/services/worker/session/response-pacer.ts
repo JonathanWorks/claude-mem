@@ -60,7 +60,7 @@ export function planRateLimitResume(session: ActiveSession): { resume: boolean; 
 }
 
 /**
- * Unattended resumes allowed in a row while the cmem.ai gateway can serve the
+ * Unattended resumes allowed in a row while the hosted gateway can serve the
  * work — memory's provider, or the opt-in quota fallback — whichever pause
  * scheduled them: a transport pause's backoff (#4204), a rate
  * limit's Retry-After, or the move to the Anthropic plan after a cmem fallback.

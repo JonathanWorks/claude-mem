@@ -96,7 +96,8 @@ afterEach(() => {
 });
 
 describe('session_id and trace in the OpenRouter request body', () => {
-  for (const apiUrl of [OPENROUTER_URL, GATEWAY_URL]) {
+  // PWM fork: the hosted gateway is removed, so only the OpenRouter endpoint is exercised.
+  for (const apiUrl of [OPENROUTER_URL]) {
     it(`are sent to ${new URL(apiUrl).hostname}, and user is not`, () => {
       const body = buildOpenRouterRequestBody({ ...base, apiUrl, label: OBSERVATION });
       expect(body.session_id).toBe('session-1');
@@ -118,7 +119,8 @@ describe('session_id and trace in the OpenRouter request body', () => {
     }
   });
 
-  it('carry no trace_id for the wrap-up, which belongs to no generation', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('carry no trace_id for the wrap-up, which belongs to no generation', () => {
     const body = buildOpenRouterRequestBody({
       ...base, apiUrl: GATEWAY_URL, plainText: true, label: { kind: 'telegram_wrapup', sessionId: 'session-1' },
     });
@@ -245,7 +247,8 @@ describe('across a history reset', () => {
   ];
 
   for (const endpoint of endpoints) {
-    it(`session_id holds and trace_id changes (${new URL(endpoint.apiUrl).hostname})`, async () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip(`session_id holds and trace_id changes (${new URL(endpoint.apiUrl).hostname})`, async () => {
       const session = makeSession();
       const queue = makeQueue(session, [
         observation(0),

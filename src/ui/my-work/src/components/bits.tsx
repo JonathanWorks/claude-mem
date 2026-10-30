@@ -193,7 +193,7 @@ export function LiveIndicator() {
         </TooltipTrigger>
         <TooltipContent className="max-w-72">
           {demonstration
-            ? mode === 'home' ? 'Streams from the local worker, localhost:37777 (demonstration)' : 'Checks cmem.ai for new sync changes every few seconds (demonstration)'
+            ? mode === 'home' ? 'Streams from the local worker, localhost:37777 (demonstration)' : 'Checks the hosted service for new sync changes every few seconds (demonstration)'
             : <>{connection.detail} {connection.tooltip}</>}
         </TooltipContent>
       </Tooltip>

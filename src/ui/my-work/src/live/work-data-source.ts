@@ -1,6 +1,6 @@
 // The one boundary between the screens and where work comes from (plan: "The adapter decision").
 // Screens consume a WorkModel and never see API shapes. Implementations: sampleSource (fixtures) and
-// localSource (the worker at localhost:37777); cloudSource (cmem.ai) comes later.
+// localSource (the worker at localhost:37777); cloudSource (the hosted service) comes later.
 import type { Agent, CurrentPeriod, Device, FocusArea, FocusAsk, FocusChange, PastPeriod, Request, SkillRun } from '../data.ts'
 import type { OwnerRule, RuleChange, RulesFile, RulesLearning, RuleScope } from '../data-rules.ts'
 import type { ConnectionStatus } from './connection-status.ts'

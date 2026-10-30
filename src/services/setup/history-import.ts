@@ -1,10 +1,10 @@
 /**
  * Finish Setup's "Bring your existing memory" (On The Go only): uploads this machine's own observations to the
- * person's CMEM Pro memory through cmem.ai's existing POST /api/import, authenticated with the installer's setup
+ * person's CMEM Pro memory through the hosted service's existing POST /api/import, authenticated with the installer's setup
  * token (the same bearer /api/hooks takes). That route persists observations only, so this sends observations only,
  * and the receipt counts exactly those. Sessions, summaries and prompts stay on this computer.
  *
- * Batches are small enough for one serverless request each. Imports are idempotent on cmem.ai (stable ids), so a
+ * Batches are small enough for one serverless request each. Imports are idempotent on the hosted service (stable ids), so a
  * retried run re-sends safely: rows already there come back as skipped. There is no time limit; a refused batch
  * stops the run with the server's reason, and Continue can start it again.
  */
@@ -20,9 +20,9 @@ export interface HistoryImportState {
   state: 'idle' | 'running' | 'done' | 'failed';
   total: number;
   sent: number;
-  /** Observations cmem.ai wrote (new to the account). */
+  /** Observations the hosted service wrote (new to the account). */
   imported: number;
-  /** Observations cmem.ai already had, or could not read. */
+  /** Observations the hosted service already had, or could not read. */
   skipped: number;
   percent: number;
   error: string | null;
@@ -56,7 +56,7 @@ function toImportObservation(row: ObservationRow) {
 
 export interface HistoryImportOptions {
   openDatabase: () => Database;
-  /** e.g. https://cmem.ai */
+  /** Base origin of the history service. */
   origin: () => string;
   /** The installer's setup token (CLAUDE_MEM_CLOUD_SYNC_TOKEN); null when this machine has no CMEM Pro connection. */
   token: () => string | null;
@@ -116,7 +116,7 @@ export class HistoryImport {
           body: JSON.stringify({ observations: rows.map(toImportObservation) }),
         });
         const answer = await response.json().catch(() => null) as { stats?: { observationsImported?: number; observationsSkipped?: number }; error?: string; message?: string } | null;
-        if (!response.ok) throw new Error(`cmem.ai refused the import (HTTP ${response.status}${answer?.message || answer?.error ? `: ${answer.message ?? answer.error}` : ''}).`);
+        if (!response.ok) throw new Error(`the hosted service refused the import (HTTP ${response.status}${answer?.message || answer?.error ? `: ${answer.message ?? answer.error}` : ''}).`);
         after = rows[rows.length - 1].id;
         const sent = this.current.sent + rows.length;
         this.update({

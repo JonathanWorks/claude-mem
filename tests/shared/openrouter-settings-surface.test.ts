@@ -73,7 +73,8 @@ describe('openai-compatible settings surface', () => {
 });
 
 describe('isClaudeMemObserverBaseUrl', () => {
-  it('recognizes the observer gateway', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('recognizes the observer gateway', () => {
     expect(isClaudeMemObserverBaseUrl('https://cmem.ai/api/inference/v1')).toBe(true);
     expect(isClaudeMemObserverBaseUrl(' https://CMEM.ai/api/inference/v1 ')).toBe(true);
   });

@@ -77,6 +77,15 @@ describe("authenticateRequest with LOCAL_TOKEN_SHA256", () => {
 		expect(fetchCalls).toBe(0);
 	});
 
+	it("fails closed (503) with no local table and no TOKEN_VERIFY_URL, without any network call", async () => {
+		const env = loadEnv({ DATABASE_URL: "postgres://unused/db" });
+		expect(env.TOKEN_VERIFY_URL).toBe("");
+		const result = await authenticateRequest(req({ Authorization: "Bearer device-a", "X-User-Id": "jon" }), env);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.response.status).toBe(503);
+		expect(fetchCalls).toBe(0);
+	});
+
 	it("still calls TOKEN_VERIFY_URL when LOCAL_TOKEN_SHA256 is unset (upstream behaviour)", async () => {
 		const env = loadEnv({ DATABASE_URL: "postgres://unused/db", TOKEN_VERIFY_URL: "http://verify.test/v" });
 		expect(env.LOCAL_TOKEN_SHA256).toBe("");

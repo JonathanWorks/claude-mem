@@ -58,7 +58,8 @@ describe('server runtime providers go through the cmem key lock', () => {
     expect(await instantiateServerGenerationProvider('openrouter')).toBeNull();
   });
 
-  it('sends a cm_pro_ key to the cmem gateway', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends a cm_pro_ key to the cmem gateway', async () => {
     process.env.OPENROUTER_API_KEY = CM_KEY;
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = GATEWAY;
     const provider = await instantiateServerGenerationProvider('openrouter');
@@ -66,7 +67,8 @@ describe('server runtime providers go through the cmem key lock', () => {
     expect(keyOf(provider)).toBe(CM_KEY);
   });
 
-  it('never sends a personal key to the cmem gateway', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never sends a personal key to the cmem gateway', async () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-v1-personal';
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = GATEWAY;
     expect(await instantiateServerGenerationProvider('openrouter')).toBeNull();

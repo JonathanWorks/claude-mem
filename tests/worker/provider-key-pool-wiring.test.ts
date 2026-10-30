@@ -63,7 +63,8 @@ describe('key pool wiring', () => {
       expect(isOpenRouterAvailable()).toBe(true);
     });
 
-    it('NEVER pools personal keys onto the cmem gateway', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('NEVER pools personal keys onto the cmem gateway', () => {
       // The gateway key is account-delivered; the list is by definition the
       // user's personal keys. Rotating into it would send a personal credential
       // to the gateway — the same leak resolveOpenRouterConfig already refuses
@@ -79,7 +80,8 @@ describe('key pool wiring', () => {
       expect(config.apiKeys).not.toContain('sk-or-personal-2');
     });
 
-    it('keeps the list off the gateway when the key pairing is withheld', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('keeps the list off the gateway when the key pairing is withheld', () => {
       // A personal primary key on the gateway URL is withheld (the cm_pro_ key
       // lock); the pool must not route around that by rotating into the list.
       process.env.CLAUDE_MEM_OPENROUTER_API_KEY = 'sk-or-personal-0';

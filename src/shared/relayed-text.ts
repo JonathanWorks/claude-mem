@@ -79,13 +79,13 @@ export function clipUtf16(text: string, maxUtf16Units: number): string {
 }
 
 /**
- * Where a relayed link may point: the cmem.ai site, OpenRouter (whose remedy
+ * Where a relayed link may point: the the hosted service site, OpenRouter (whose remedy
  * pages and model list claude-mem links to), and the claude-mem issue tracker
  * (plan 2026-08-16 §1.1).
  */
 function isApprovedDestination(url: URL): boolean {
-  if (url.hostname === 'cmem.ai' || url.hostname === 'openrouter.ai') return true;
-  return url.hostname === 'github.com' && /^\/thedotmack\/claude-mem\/issues(\/|$)/.test(url.pathname);
+  // PWM fork: no vendor destinations; only the model provider's own host.
+  return url.hostname === 'openrouter.ai';
 }
 
 /**

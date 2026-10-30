@@ -78,7 +78,8 @@ describe('cmem memory credential retention', () => {
       });
     });
 
-    it('reuses an already-configured CMEM gateway key when no newer key exists', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('reuses an already-configured CMEM gateway key when no newer key exists', () => {
       const resolved = resolveCmemMemoryCredentials(null, configuredCmemSettings);
 
       expect(resolved).toEqual({
@@ -134,7 +135,8 @@ describe('cmem memory credential retention', () => {
       expect(Object.values(updates).filter(value => value === 'cm_pro_staged')).toHaveLength(1);
     });
 
-    it('does not clear fallback merely because an existing configured key is reused', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('does not clear fallback merely because an existing configured key is reused', () => {
       const credentials = resolveCmemMemoryCredentials(null, {
         ...configuredCmemSettings,
         CLAUDE_MEM_PRO_FALLBACK_AT: '2026-08-26T20:00:00.000Z',
@@ -189,7 +191,8 @@ describe('cmem memory credential retention', () => {
   });
 
   describe('buildAnthropicMaxLocalSettings', () => {
-    it('turns off old cloud sync and removes CMEM credentials on a local switch', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('turns off old cloud sync and removes CMEM credentials on a local switch', () => {
       expect(buildAnthropicMaxLocalSettings({
         ...configuredCmemSettings,
         CLAUDE_MEM_CLOUD_SYNC_TOKEN: 'sync-secret',
@@ -232,7 +235,8 @@ describe('cmem memory credential retention', () => {
   });
 
   describe('buildPersonalOpenRouterSettings', () => {
-    it('resets the CMEM endpoint/model and moves the only CMEM key into staging', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('resets the CMEM endpoint/model and moves the only CMEM key into staging', () => {
       const updates = buildPersonalOpenRouterSettings(
         '  sk-or-personal  ',
         configuredCmemSettings,
@@ -294,7 +298,8 @@ describe('cmem memory credential retention', () => {
   });
 
   describe('buildNonInteractiveOpenRouterSettings', () => {
-    it('stages an active CMEM key and resets its endpoint before a personal env key can be used', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('stages an active CMEM key and resets its endpoint before a personal env key can be used', () => {
       const updates = buildNonInteractiveOpenRouterSettings(
         configuredCmemSettings,
         'openrouter/default-model',

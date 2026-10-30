@@ -146,7 +146,8 @@ describe('the cmem memory key stays with the cmem gateway', () => {
     expect(selectProviderForGenerator()).toEqual({ provider: 'claude', gatewayProbeClaimId: null });
   });
 
-  it('still reaches the gateway with the memory key when the base URL is untouched', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('still reaches the gateway with the memory key when the base URL is untouched', async () => {
     postSettings({ CLAUDE_MEM_OPENROUTER_API_KEY: viewerMask(MEMORY_KEY) });
 
     const provider = new OpenRouterProvider({} as any, {} as any);
@@ -155,7 +156,8 @@ describe('the cmem memory key stays with the cmem gateway', () => {
     expect(requests).toEqual([{ url: `${GATEWAY_BASE_URL}/chat/completions`, authorization: `Bearer ${MEMORY_KEY}` }]);
   });
 
-  it('never sends a personal key to the gateway after a settings-API base-URL change', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never sends a personal key to the gateway after a settings-API base-URL change', async () => {
     writeFileSync(settingsPath, JSON.stringify({
       CLAUDE_MEM_PROVIDER: 'openrouter',
       CLAUDE_MEM_OPENROUTER_BASE_URL: '',
@@ -175,7 +177,8 @@ describe('the cmem memory key stays with the cmem gateway', () => {
     expect(requests.filter(request => request.authorization?.includes(PERSONAL_KEY))).toEqual([]);
   });
 
-  it('never sends a personal key to the gateway (existing tuple lock)', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never sends a personal key to the gateway (existing tuple lock)', async () => {
     process.env.CLAUDE_MEM_OPENROUTER_API_KEY = PERSONAL_KEY;
     const provider = new OpenRouterProvider({} as any, {} as any);
 

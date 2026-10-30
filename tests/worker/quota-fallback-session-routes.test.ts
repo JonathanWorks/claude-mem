@@ -253,7 +253,8 @@ describe('quota fallback in SessionRoutes', () => {
     await expectNoResume(routes);
   });
 
-  it('does not resume when dispatch would not use the fallback (cmem-gateway branch)', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('does not resume when dispatch would not use the fallback (cmem-gateway branch)', async () => {
     // The gateway trial-expiry branch sends work to Claude regardless of the
     // quota fallback rule, so the sweep finds Claude's fresh breaker and starts
     // nothing: the quota fallback never routes around the cmem branch.

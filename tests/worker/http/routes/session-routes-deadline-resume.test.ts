@@ -249,7 +249,8 @@ describe('deadline-paused observer resumes without a new hook (#4204)', () => {
       }
     });
 
-    it('stops re-arming after the cap on the gateway; a hook-driven start still drains the work', async () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('stops re-arming after the cap on the gateway; a hook-driven start still drains the work', async () => {
       // Settings apply env overrides last, so this pins memory on the gateway.
       process.env.CLAUDE_MEM_PROVIDER = 'openrouter';
       process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://cmem.ai/api/inference/v1';
@@ -277,7 +278,8 @@ describe('deadline-paused observer resumes without a new hook (#4204)', () => {
       expect(harness.buffer.getPendingCount(harness.session.sessionDbId)).toBe(0);
     });
 
-    it('caps unattended resumes when the gateway serves as the opt-in quota fallback', async () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('caps unattended resumes when the gateway serves as the opt-in quota fallback', async () => {
       // Memory's own provider is Gemini, but the gateway can take the work as
       // the quota fallback: every unattended resume there spends plan tokens too.
       process.env.CLAUDE_MEM_PROVIDER = 'gemini';
@@ -345,7 +347,8 @@ describe('deadline-paused observer resumes without a new hook (#4204)', () => {
       session.scheduledResumeTimer = undefined;
     }
 
-    it('shares one budget between transport and rate-limit resumes; spent, the breaker takes over', async () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('shares one budget between transport and rate-limit resumes; spent, the breaker takes over', async () => {
       process.env.CLAUDE_MEM_PROVIDER = 'openrouter';
       process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://cmem.ai/api/inference/v1';
       const harness = makeHarness(MAX_UNATTENDED_GATEWAY_RESUMES + 5);
@@ -375,7 +378,8 @@ describe('deadline-paused observer resumes without a new hook (#4204)', () => {
       expect(harness.stats().finalizeCalls).toBe(0);
     });
 
-    it('counts the move to the Anthropic plan after a cmem fallback against the same budget', async () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('counts the move to the Anthropic plan after a cmem fallback against the same budget', async () => {
       process.env.CLAUDE_MEM_PROVIDER = 'openrouter';
       process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://cmem.ai/api/inference/v1';
       const harness = makeHarness(0);
@@ -401,7 +405,8 @@ describe('deadline-paused observer resumes without a new hook (#4204)', () => {
       }
     });
 
-    it('keeps the periodic sweep off a session whose unattended gateway resumes are spent', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('keeps the periodic sweep off a session whose unattended gateway resumes are spent', () => {
       process.env.CLAUDE_MEM_PROVIDER = 'openrouter';
       process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://cmem.ai/api/inference/v1';
       const harness = makeHarness(0);

@@ -1,0 +1,125 @@
+# PWM fork: track upstream releases without rewriting history. Each week (or on demand) this merges
+# the newest upstream release tag into a fresh branch off `pwm`, runs the phone-home guard,
+# typecheck and the fast test lane, and opens a pull request for review. A merge conflict opens an
+# issue listing the conflicted files instead. It never pushes to `pwm` and never merges.
+name: PWM upstream sync
+
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to merge (default: newest vX.Y.Z release)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pwm-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: pwm
+          fetch-depth: 0
+
+      - name: Pick the upstream release
+        id: pick
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/thedotmack/claude-mem.git
+          git fetch --quiet --tags upstream
+          tag="${INPUT_TAG:-$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)}"
+          if [ -z "$tag" ]; then echo "no upstream release tag found" >&2; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$tag" HEAD; then
+            echo "pwm already contains $tag"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "upstream-sync/$tag" >/dev/null; then
+            echo "upstream-sync/$tag already exists; review that pull request"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge the release into a review branch
+        id: merge
+        if: steps.pick.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "pwm-upstream-sync"
+          git config user.email "pwm-upstream-sync@users.noreply.github.com"
+          git switch -c "upstream-sync/$TAG"
+          if git merge --no-ff --no-edit "$TAG"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "files<<EOF_FILES"
+              git diff --name-only --diff-filter=U
+              echo "EOF_FILES"
+            } >> "$GITHUB_OUTPUT"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
+
+      - name: Open an issue for a conflicted merge
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+          FILES: ${{ steps.merge.outputs.files }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # the backticks are literal Markdown fences
+          body="$(printf 'Merging upstream %s into pwm conflicts in:\n\n```\n%s\n```\n\nResolve by hand on a branch off pwm, then re-run the phone-home guard.' "$TAG" "$FILES")"
+          gh issue create --title "Upstream $TAG conflicts with pwm" --body "$body"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.merge.outputs.conflict == 'false'
+
+      - name: Guard, typecheck and fast tests
+        id: checks
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          set -uo pipefail
+          npm install --no-audit --no-fund >/dev/null
+          status=0
+          bash scripts/pwm-no-phone-home.sh > guard.log 2>&1 || status=1
+          npm run typecheck > typecheck.log 2>&1 || status=1
+          bun scripts/test-lanes.ts fast > tests.log 2>&1 || status=1
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Guard"; echo '```'; tail -40 guard.log; echo '```'
+            echo "## Typecheck"; echo '```'; tail -20 typecheck.log; echo '```'
+            echo "## Fast tests"; echo '```'; grep -E '^\(fail\)|^ *[0-9]+ (pass|fail)' tests.log | tail -60; echo '```'
+          } > report.md
+
+      - name: Push the branch and open a pull request
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+          STATUS: ${{ steps.checks.outputs.status }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git push origin "upstream-sync/$TAG"
+          verdict="checks passed"
+          if [ "$STATUS" != "0" ]; then verdict="checks FAILED: strip new vendor paths or fix tests before merging"; fi
+          gh pr create --base pwm --head "upstream-sync/$TAG" \
+            --title "Merge upstream $TAG ($verdict)" \
+            --body-file <(printf 'Merges upstream release %s into pwm.\n\n%s\n\n' "$TAG" "$verdict"; cat report.md)

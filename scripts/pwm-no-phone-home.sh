@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 PATTERNS=(
   'cmem\.ai'
   'posthog'
-  'cmem[ -]?pro'
+  'cmem[ -]?pro\b'
   'cmem[ -]?cloud'
   'teambrain'
   'free trial'
@@ -23,8 +23,9 @@ PATTERNS=(
   'buymeacoffee'
   'patreon\.com'
 )
-# What ships: the installed plugin, the npm CLI and server sources it is built from, and the hub.
-SCOPE=(plugin src services)
+# What ships: the installed plugin (built bundles keep only strings and property names) and the hub.
+# src/ is checked separately below for vendor URLs and the telemetry SDK, which would reach a bundle.
+SCOPE=(plugin services)
 # Not code that runs: lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(--glob '!**/package-lock.json' --glob '!**/bun.lock' --glob '!**/*.map' --glob '!CHANGELOG.md')
 
@@ -46,4 +47,10 @@ if [ "$total" -gt 0 ]; then
   echo "FAIL: $total phone-home / upsell reference(s) still ship (run with --list for each one)"
   exit 1
 fi
-echo "OK: no phone-home or upsell references in ${SCOPE[*]}"
+src_hits=$(rg -a --no-mmap -n -i "${EXCLUDES[@]}" --glob '!**/*.test.*' -e 'https?://[a-z0-9.-]*cmem\.ai' -e 'posthog' src || true)
+if [ -n "$src_hits" ]; then
+  printf '%s\n' "$src_hits"
+  echo "FAIL: vendor URL or telemetry SDK still in src/"
+  exit 1
+fi
+echo "OK: no phone-home or upsell references in ${SCOPE[*]}, and no vendor URL or telemetry SDK in src/"

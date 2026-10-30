@@ -5,7 +5,6 @@
  */
 
 import { cmemProOrigin } from '../shared/cmem-gateway.js';
-import { PRO_TRIAL_LABEL } from '../shared/pro-promo.js';
 
 export const PROVIDER_PROMPT_MESSAGE =
   'Select Provider:\n================';
@@ -29,8 +28,7 @@ export interface ProviderLabels {
  */
 export function buildProviderLabels(): ProviderLabels {
   return {
-    cmem: `CMEM Pro (${PRO_TRIAL_LABEL}: Tokens for Observations + Real-Time Cloud Sync `
-      + 'for Claude.ai, ChatGPT.com, anything that accepts an MCP Connector)',
+    cmem: '',
     cmemHint: '',
     claude: 'Use your Anthropic Max Plan (no cloud sync, uses tokens for observations)',
     claudeHint: '',

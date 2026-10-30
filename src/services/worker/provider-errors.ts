@@ -58,7 +58,7 @@ export { MAX_ERROR_BODY_BYTES, readCappedErrorBody } from '../../shared/capped-e
 
 /**
  * Optional structured detail carried alongside a classified error. Populated
- * when the upstream (e.g. the cmem.ai gateway) returns a taxonomy envelope
+ * when the upstream (e.g. the hosted gateway) returns a taxonomy envelope
  * `{ code, message, action, url, request_id }`; the worker carries these
  * verbatim so the log line and the session-start warning show the same words.
  */

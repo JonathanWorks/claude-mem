@@ -144,8 +144,6 @@ import { SyncClient } from './sync/SyncClient.js';
 import { ViewerRoutes } from './worker/http/routes/ViewerRoutes.js';
 import { SetupScan } from './prompt-import/setup-scan.js';
 import { AGENT_WRITTEN_PROMPTS_FILE, writeJsonAtomic } from './work-view/request-groups.mjs';
-import { HistoryImport } from './setup/history-import.js';
-import { cmemProOrigin } from '../shared/cmem-gateway.js';
 import { Database as BunDatabase } from 'bun:sqlite';
 import { WorkViewRoutes } from './worker/http/routes/WorkViewRoutes.js';
 import { SessionRoutes } from './worker/http/routes/SessionRoutes.js';
@@ -164,7 +162,6 @@ import { DedupRoutes } from './worker/http/routes/DedupRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { CloudSyncRoutes } from './worker/http/routes/CloudSyncRoutes.js';
-import { TeamBrainRoutes } from './worker/http/routes/TeamBrainRoutes.js';
 import { BackupRoutes } from './worker/http/routes/BackupRoutes.js';
 import { applyPendingRestore } from './backup/restore-swap.js';
 
@@ -598,11 +595,6 @@ export class WorkerService implements WorkerRef {
         saveAgentWrittenPromptIds: promptIds => writeJsonAtomic(path.join(DATA_DIR, 'work-view', AGENT_WRITTEN_PROMPTS_FILE), { promptIds, updatedAt: new Date().toISOString() }),
       }),
       // Finish Setup's history upload to CMEM Pro, with the setup token checkout saved.
-      historyImport: new HistoryImport({
-        openDatabase: () => new BunDatabase(DB_PATH, { readonly: true, create: false }),
-        origin: () => cmemProOrigin(),
-        token: () => SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_CLOUD_SYNC_TOKEN?.trim() || null,
-      }),
     });
     this.server.registerRoutes(this.workViewRoutes);
     this.server.registerRoutes(new ViewerRoutes(this.sseBroadcaster, this.dbManager, this.sessionManager));
@@ -938,11 +930,6 @@ export class WorkerService implements WorkerRef {
       // unconfigured install answers {configured: false} instead of 404.
       this.server.registerRoutes(new CloudSyncRoutes(this.dbManager));
       logger.info('WORKER', 'CloudSyncRoutes registered');
-      // TeamBrain proxy for the team_* MCP tools, beside cloud sync because it
-      // signs with the same credentials. Settings are read per request, so a
-      // join or leave applies without a restart.
-      this.server.registerRoutes(new TeamBrainRoutes(() => SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH)));
-      logger.info('WORKER', 'TeamBrainRoutes registered');
       this.initPhaseTracker.setInitPhase('routes_ready');
 
       // Backup endpoints (pro-backup plan Phase 2). Same late/unconditional

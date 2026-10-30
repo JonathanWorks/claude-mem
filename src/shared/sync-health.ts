@@ -39,10 +39,10 @@ export interface SyncAuthFailure {
 export const SYNC_AUTH_MESSAGES: Record<SyncAuthCode, string> = {
   invalid_token:
     'Cloud sync is paused: this device\'s sync token is no longer valid (connecting another machine can rotate it). '
-    + 'Reconnect at https://cmem.ai (Connect), then restart claude-mem. Your local memories are safe.',
+    + 'Re-issue this device\'s token on the sync hub, then restart claude-mem. Your local memories are safe.',
   subscription_inactive:
-    'Cloud sync is paused: your CMEM Pro trial or subscription is not active. '
-    + 'Renew at https://cmem.ai/pro and sync resumes on its own within the hour. Your local memories are safe.',
+    'Cloud sync is paused: the sync hub refused this account. '
+    + 'Check the hub\'s token table; sync resumes on its own within the hour. Your local memories are safe.',
 };
 
 /**

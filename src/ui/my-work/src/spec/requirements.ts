@@ -76,7 +76,7 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R8.4', section: '8', kind: 'backend', text: 'Telemetry on how agents adhere to work state (removed in the PWM fork).' },
 
   // 9. TeamBrain
-  { id: 'R9.1', section: '9', kind: 'ui', text: 'TeamBrain is a natural extension of the same GUI, not a separate app.' },
+  { id: 'R9.1', section: '9', kind: 'ui', text: 'Team sharing is a natural extension of the same GUI, not a separate app.' },
   { id: 'R9.2', section: '9', kind: 'ui', text: 'Team work-state board: work collisions, roles, delegation, everyone in sync.' },
   { id: 'R9.3', section: '9', kind: 'ui', text: '"Who asked" is essential in team mode.' },
   { id: 'R9.4', section: '9', kind: 'ui', text: 'Self-serve PLG: buy the team plan from inside the product.' },
@@ -99,7 +99,7 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R12.3', section: '12', kind: 'ui', text: 'Lead with what matters to the reader.' },
 
   // 13. Home and on the go
-  { id: 'R13.1', section: '13', kind: 'ui', text: 'The same UI runs at home (localhost) and on the go (cmem.ai).' },
+  { id: 'R13.1', section: '13', kind: 'ui', text: 'The same UI runs at home (localhost) and on the go (the hosted service).' },
   { id: 'R13.2', section: '13', kind: 'ui', text: "Other machines' agents show alongside local ones, already synced." },
   { id: 'R13.3', section: '13.1', kind: 'backend', text: 'Replay rows in write order, then source device and row.' },
   { id: 'R13.4', section: '13.2', kind: 'ui', text: 'Say which agent and machine did the work; device name when the agent is unknown.' },

@@ -46,7 +46,6 @@ import {
   PROVIDER_PROMPT_MESSAGE,
 } from '../cmem-pro-costs.js';
 import { clearProFallback, isCmemGatewayUrl } from '../../shared/cmem-gateway.js';
-import { PRO_TRIAL_LABEL, PRO_TRIAL_PITCH, proTrialUrl } from '../../shared/pro-promo.js';
 import {
   buildAnthropicMaxLocalSettings,
   buildCmemActivationSettings,
@@ -56,7 +55,6 @@ import {
   resolveCmemMemoryCredentials,
   type DeliveredCmemMemoryCredentials,
 } from '../cmem-memory-credentials.js';
-import { parseTeamBrainTeamRef, type TeamBrainTeamRef } from '../../shared/teambrain.js';
 import { relayedLine } from '../../shared/relayed-text.js';
 import { endSetupSession, INITIAL_SETUP_STATE, readSetupState, startSetupSession, writeSetupState } from '../../shared/setup-state.js';
 import { intentCredentialHeaders, readIntentCredentials } from '../../shared/intent-credentials.js';
@@ -1237,13 +1235,9 @@ export async function promptProvider(
       const providerResult = await p.multiselect<ProviderChoice>({
         message: PROVIDER_PROMPT_MESSAGE,
         options: [
-          { value: 'cmem', label: labels.cmem, hint: labels.cmemHint },
           { value: 'claude', label: labels.claude, hint: labels.claudeHint },
         ],
-        // CMEM Pro pre-selected: it is the recommended path and the one the
-        // funnel is built around. Selecting it no longer means "pay now" —
-        // it opens the offer page to read first.
-        initialValues: ['cmem'],
+        initialValues: ['claude'],
         required: true,
       });
       // @clack/prompts 1.8: isCancel narrows to unique CANCEL_SYMBOL, not generic symbol.
@@ -1283,7 +1277,7 @@ export async function promptProvider(
     // provider settings stay exactly as they are, and no staged or earlier
     // gateway key is promoted in their place.
     if (!enrollment.memory) {
-      log.warn(`This account syncs through a TeamBrain seat, which does not include CMEM Pro's observer. Memory keeps its current provider (${initialProvider}). CMEM Pro: ${proTrialUrl('installer')}`);
+      log.warn(`This account does not include a hosted observer. Memory keeps its current provider (${initialProvider}).`);
       return initialProvider;
     }
     const cmemCredentials = resolveCmemMemoryCredentials(enrollment.memory, persistedSettings);
@@ -1473,7 +1467,7 @@ async function promptClaudeModel(options: InstallOptions, interactive: boolean =
 
 // --- claude-mem OAuth pairing ----------------------------------------------
 // Every installer authenticates through the same GitHub/Google OAuth screen as
-// cmem.ai. Login only proves account ownership; provider selection happens
+// the hosted service. Login only proves account ownership; provider selection happens
 // afterward, and only the CMEM Pro choice continues into trial enrollment.
 
 function nonEmptyTrimmedString(value: unknown): string | null {
@@ -1482,7 +1476,7 @@ function nonEmptyTrimmedString(value: unknown): string | null {
 
 const OAUTH_START_TIMEOUT_MS = 10_000;
 // The optional end-of-install sign-in offer must not hold a finished install
-// hostage to a stalled cmem.ai: give up well before the blocking login would.
+// hostage to a stalled the hosted service: give up well before the blocking login would.
 const OAUTH_DEFERRED_START_TIMEOUT_MS = 3_000;
 const OAUTH_POLL_TIMEOUT_MS = 10_000;
 // Fallback budget when the server does not report `expires_in`. The server
@@ -1647,7 +1641,7 @@ export function lastOAuthStartErrorMessage(): string | null {
 export type InstallState = 'fresh' | 'update';
 
 /**
- * What this install tells cmem.ai alongside the sign-in start request: whether
+ * What this install tells the hosted service alongside the sign-in start request: whether
  * it ran over an existing install, and the numbers-only local usage summary
  * (see install/usage-summary.ts). Set once by the install command before any
  * pairing starts; both are optional on the wire and omitted when unknown.
@@ -1679,62 +1673,12 @@ export function buildInstallerOAuthStartBody(
 
 /** Starts an OAuth pairing. No email address or identity is accepted from the CLI. */
 export async function startInstallerOAuthPairing(
-  opts: { source?: string; timeoutMs?: number; teamInvite?: string } = {},
+  _opts: { source?: string; timeoutMs?: number; teamInvite?: string } = {},
 ): Promise<InstallerOAuthPairing | null> {
-  const source = opts.source ?? 'npx-installer';
-  lastStartFailure = null;
-  lastStartErrorMessage = null;
-  let installHeaders: Record<string, string>;
-  try {
-    // Bind the already-issued installation at sign-in. An invalid explicit
-    // identity must stop here, before any request can create another pairing.
-    installHeaders = intentCredentialHeaders(readIntentCredentials());
-  } catch (error: unknown) {
-    lastStartFailure = 'credentials';
-    lastStartErrorMessage = error instanceof Error ? error.message : String(error);
-    return null;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? OAUTH_START_TIMEOUT_MS);
-  try {
-    const response = await fetch(CMEM_INSTALLER_OAUTH_START_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...installHeaders },
-      body: JSON.stringify(buildInstallerOAuthStartBody(source, hostname(), signupContext, opts.teamInvite)),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      lastStartFailure = 'http_error';
-      try {
-        const body: unknown = await response.json();
-        if (body && typeof body === 'object') {
-          lastStartErrorMessage = nonEmptyTrimmedString((body as { message?: unknown }).message);
-        }
-      } catch (error: unknown) {
-        if (error instanceof Error && error.name === 'AbortError') throw error;
-      }
-      return null;
-    }
-    // A 2xx with unparseable JSON is a server-response problem, not a
-    // connection failure; keep it out of the `network` bucket.
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch (error: unknown) {
-      // The request timer can fire while the body is still streaming; that is
-      // the same timeout as a stalled connect, not a malformed response.
-      lastStartFailure = error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'bad_body';
-      return null;
-    }
-    const pairing = parseInstallerOAuthStartBody(body);
-    if (!pairing) lastStartFailure = 'bad_body';
-    return pairing;
-  } catch (error: unknown) {
-    lastStartFailure = error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'network';
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  // PWM fork: there is no vendor sign-in; the installer never starts a pairing or makes a request.
+  lastStartFailure = 'credentials';
+  lastStartErrorMessage = 'Sign-in to the hosted service is removed from this build.';
+  return null;
 }
 
 /**
@@ -1752,8 +1696,7 @@ export interface TrialReadyResult {
   memory: DeliveredCmemMemoryCredentials | null;
   plan: TrialPlan;
   trialEndsAt: string | null;
-  /** The TeamBrain team a `teambrain_join` pairing joined, when the server names it. */
-  team: TeamBrainTeamRef | null;
+  team: null;
   /** Where that team's TeamBrain API lives, when the server says. */
   teambrainUrl: string | null;
 }
@@ -1787,8 +1730,6 @@ export function buildTrialReadySettings(
   if (!result.memory) return syncConnection;
   return {
     ...syncConnection,
-    CLAUDE_MEM_PRO_TRIAL_STATE: 'active',
-    CLAUDE_MEM_PRO_TRIAL_ENDS_AT: result.trialEndsAt ?? '',
     CLAUDE_MEM_PRO_PLAN: result.plan,
     CLAUDE_MEM_PRO_MEMORY_KEY: result.memory.memoryKey,
     CLAUDE_MEM_PRO_MEMORY_BASE_URL: result.memory.memoryBaseUrl,
@@ -1836,7 +1777,7 @@ export function parseTrialReadyBody(body: unknown): TrialReadyResult | null {
       : null,
     plan: b.plan === 'trial' || b.plan === 'pro' || b.plan === 'none' || b.plan === 'teambrain_seat' ? b.plan : 'trial',
     trialEndsAt: nonEmptyTrimmedString(b.trial?.ends_at),
-    team: parseTeamBrainTeamRef(b.team),
+    team: null,
     teambrainUrl: nonEmptyTrimmedString(b.teambrain_url),
   };
 }
@@ -1860,7 +1801,7 @@ const JOIN_FAILED_FALLBACKS: Record<string, string> = {
 
 /** One line for a refused join: the server's own words when it sent them, and its reason code. */
 export function joinFailedMessage(outcome: { reason: string; message: string | null }): string {
-  const said = relayedLine(outcome.message) || JOIN_FAILED_FALLBACKS[outcome.reason] || 'cmem.ai refused the join.';
+  const said = relayedLine(outcome.message) || JOIN_FAILED_FALLBACKS[outcome.reason] || 'the hosted service refused the join.';
   const reason = relayedLine(outcome.reason);
   return `Could not join the team: ${said}${reason && reason !== 'unknown' ? ` (${reason})` : ''}`;
 }
@@ -2002,7 +1943,7 @@ export async function waitForInstallerPairing(
       if (result.kind === 'unreachable') {
         consecutiveFailures += 1;
         if (consecutiveFailures >= 3) {
-          log.error(`cmem.ai is not responding. ${rerun} when it is reachable.`);
+          log.error(`the hosted service is not responding. ${rerun} when it is reachable.`);
           return null;
         }
       } else {
@@ -2101,7 +2042,7 @@ async function requireInstallerOAuthLogin(version: string): Promise<InstallerOAu
       phase: 'login',
     });
     spinner?.stop(styleText('red', 'Could not start OAuth login.'));
-    log.error(lastOAuthStartErrorMessage() ?? 'OAuth login is required. Run npx claude-mem install again when cmem.ai is reachable.');
+    log.error(lastOAuthStartErrorMessage() ?? 'OAuth login is required. Run npx claude-mem install again when the hosted service is reachable.');
     return null;
   }
   spinner?.stop('OAuth login ready.');
@@ -2145,7 +2086,7 @@ export async function offerDeferredLogin(options: InstallOptions, version: strin
       interactive: false,
       phase: 'deferred',
     });
-    log.error(lastOAuthStartErrorMessage() ?? 'Could not start the optional claude-mem sign-in. Run npx claude-mem install again when cmem.ai is reachable.');
+    log.error(lastOAuthStartErrorMessage() ?? 'Could not start the optional claude-mem sign-in. Run npx claude-mem install again when the hosted service is reachable.');
     return;
   }
 
@@ -2214,7 +2155,7 @@ export async function completeCmemTrialPairing(
   // no gateway key whose fallback a fresh delivery would clear.
   if (result.memory) {
     clearProFallback();
-    log.success(`CMEM Pro ${PRO_TRIAL_LABEL} active.`);
+    log.success('Hosted observer active.');
     await captureCliEvent('trial_activated', { version });
   }
   return result;
@@ -2261,7 +2202,7 @@ async function promptTelemetryOptIn(): Promise<void> {
  * existing local credentials and need no claude-mem account. `gemini`,
  * `openrouter` and `codex` are NOT exempt — openrouter is the transport for
  * the cmem gateway, so an explicit `openrouter` install may still be reaching
- * cmem.ai, and gemini and codex are bring-your-own providers that sign in
+ * the hosted service, and gemini and codex are bring-your-own providers that sign in
  * like any other. With no flag at all the provider screen can still offer
  * CMEM Pro, so login must happen first.
  */
@@ -2690,7 +2631,7 @@ async function startOnTheGoPairing(version: string): Promise<InstallerOAuthPairi
       phase: 'enrollment',
     });
     spinner?.stop(styleText('red', 'Could not start the CMEM Pro sign-in.'));
-    throw new Error(lastOAuthStartErrorMessage() ?? 'Could not start the CMEM Pro sign-in. Run npx claude-mem install again when cmem.ai is reachable.');
+    throw new Error(lastOAuthStartErrorMessage() ?? 'Could not start the CMEM Pro sign-in. Run npx claude-mem install again when the hosted service is reachable.');
   }
   spinner?.stop('CMEM Pro sign-in ready; checkout continues in the browser.');
   return pairing;
@@ -3099,14 +3040,14 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
     // Login is account-first for every install EXCEPT one that has already named
     // a provider needing no claude-mem account. `--provider claude` (or the
     // non-interactive default to claude) runs memory on the user's own Anthropic
-    // plan, so gating it on browser OAuth made an unrelated cmem.ai outage fail
+    // plan, so gating it on browser OAuth made an unrelated the hosted service outage fail
     // an install that could have completed offline — and there is no account
     // question left to ask, because the provider already answered it. Such a
     // non-interactive install still prints an optional, non-blocking sign-in
     // link at the very end (offerDeferredLogin).
     //
     // Deliberately keyed on the resolved provider, not on reachability: a silent
-    // fallback to a local install whenever cmem.ai is down would quietly change
+    // fallback to a local install whenever the hosted service is down would quietly change
     // what the user gets. This only skips a step the provider choice made moot.
     //
     // A provider reused from settings on a non-interactive run (`persisted`) is
@@ -3205,7 +3146,7 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
   // persisted claude/host provider holds no claude-mem account at all, so it
   // reports "not required" rather than a kept account.
   const browserAccountStatus = browserOutcome?.checkoutPaid
-    ? `CMEM Pro ${PRO_TRIAL_LABEL} active`
+    ? 'Hosted observer active'
     : browserOutcome?.stage === 'go-awaiting-checkout'
     ? 'CMEM Pro sign-in started (checkout not completed)'
     : browserOutcome?.stage === 'go-kept-existing-pro'
@@ -3349,9 +3290,8 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
     ``,
     `Memory injection starts on your second session in a project.`,
     cloudSyncConfigured
-      ? 'Memory syncs across your signed-in CMEM Pro agents and devices.'
-      : `Everything stays in ${styleText('cyan', '~/.claude-mem')} on this machine. cmem.ai is contacted once, at signup, to create the sign-in link, with a numbers-only usage summary (observation counts and token totals, no prompts, paths, or project names); nothing else is sent to cmem.ai (telemetry is separate: npx claude-mem telemetry).`,
-    ...(cloudSyncConfigured ? [] : [`${PRO_TRIAL_PITCH}: ${styleText('underline', proTrialUrl('installer'))}`]),
+      ? 'Memory syncs across your devices through your sync hub.'
+      : `Everything stays in ${styleText('cyan', '~/.claude-mem')} on this machine.`,
     ``,
     `${styleText('dim', `Optional: ${'/learn-codebase'} ingests a whole repo up front (~5 min)   ·   How it works: /how-it-works`)}`,
   ];

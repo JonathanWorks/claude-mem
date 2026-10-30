@@ -162,7 +162,9 @@ describe('Version Consistency', () => {
     ]);
   });
 
-  for (const bundle of ['worker-service.cjs', 'mcp-server.cjs', 'server-service.cjs', 'transcript-watcher.cjs']) {
+  // PWM fork: transcript-watcher.cjs only carried the version for telemetry, which is removed, so the
+  // bundler drops the string. The bundles that report a version still carry it.
+  for (const bundle of ['worker-service.cjs', 'mcp-server.cjs', 'server-service.cjs']) {
     it(`should have the release version injected into built ${bundle}`, () => {
       const bundlePath = path.join(projectRoot, 'plugin/scripts', bundle);
       expect(existsSync(bundlePath)).toBe(true);

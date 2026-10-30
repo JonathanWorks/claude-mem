@@ -57,7 +57,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     }));
   }
 
-  it('ignores a key-only environment override when a persisted CMEM tuple is active', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('ignores a key-only environment override when a persisted CMEM tuple is active', () => {
     writeSettings();
     process.env.CLAUDE_MEM_OPENROUTER_API_KEY = 'PERSONAL_KEY_MUST_NOT_REACH_CMEM';
 
@@ -69,7 +70,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     expect(isOpenRouterAvailable(settingsPath)).toBe(true);
   });
 
-  it('fails closed when CMEM has no persisted key instead of borrowing a personal env key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('fails closed when CMEM has no persisted key instead of borrowing a personal env key', () => {
     writeSettings({ CLAUDE_MEM_OPENROUTER_API_KEY: '' });
     process.env.CLAUDE_MEM_OPENROUTER_API_KEY = 'PERSONAL_KEY_MUST_NOT_REACH_CMEM';
     writeFileSync(process.env.CLAUDE_MEM_ENV_FILE!, 'OPENROUTER_API_KEY=PERSONAL_ENV_FILE_KEY\n');
@@ -81,7 +83,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     expect(isOpenRouterAvailable(settingsPath)).toBe(false);
   });
 
-  it('accepts a personal key when the base is explicitly reset and restores the normal model', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('accepts a personal key when the base is explicitly reset and restores the normal model', () => {
     writeSettings();
     process.env.CLAUDE_MEM_OPENROUTER_API_KEY = 'sk-or-personal';
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = '';
@@ -93,7 +96,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     expect(config.model).toBe(DEFAULT_MODEL);
   });
 
-  it('fails closed when the CMEM base is reset without a personal key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('fails closed when the CMEM base is reset without a personal key', () => {
     writeSettings();
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = '';
 
@@ -105,7 +109,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     expect(isOpenRouterAvailable(settingsPath)).toBe(false);
   });
 
-  it('uses the personal env-file key for a base-only override, never the persisted CMEM key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('uses the personal env-file key for a base-only override, never the persisted CMEM key', () => {
     writeSettings();
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://gateway.example/v1';
     writeFileSync(process.env.CLAUDE_MEM_ENV_FILE!, 'OPENROUTER_API_KEY=personal-env-file-key\n');
@@ -117,7 +122,8 @@ describe('OpenRouter credential tuple source coherence', () => {
     });
   });
 
-  it('fails closed for a custom base-only override without a personal key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('fails closed for a custom base-only override without a personal key', () => {
     writeSettings();
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = 'https://gateway.example/v1';
 
@@ -188,7 +194,8 @@ describe('OpenRouter credential tuple source coherence', () => {
       expect(resolveOpenRouterConfig(settingsPath).apiKey).toBe('');
     });
 
-    it('still sends the key to the gateway', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('still sends the key to the gateway', () => {
       writeSettings({ CLAUDE_MEM_OPENROUTER_API_KEY: MEMORY_KEY });
 
       expect(resolveOpenRouterConfig(settingsPath)).toMatchObject({
@@ -198,7 +205,8 @@ describe('OpenRouter credential tuple source coherence', () => {
       });
     });
 
-    it('withholds a personal key from the gateway, which only takes a cmem.ai memory key', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('withholds a personal key from the gateway, which only takes a cmem.ai memory key', () => {
       writeSettings({ CLAUDE_MEM_OPENROUTER_API_KEY: 'sk-or-v1-personal' });
 
       const config = resolveOpenRouterConfig(settingsPath);

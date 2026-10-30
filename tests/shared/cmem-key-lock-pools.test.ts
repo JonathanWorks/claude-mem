@@ -26,7 +26,8 @@ const ENV_KEYS = [
 ];
 
 describe('keysForEndpoint', () => {
-  it('gives the gateway the first account key only, never a pool and never a personal key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('gives the gateway the first account key only, never a pool and never a personal key', () => {
     expect(keysForEndpoint(`${GATEWAY}/chat/completions`, ['sk-personal', CM_A, CM_B])).toEqual([CM_A]);
     expect(keysForEndpoint(`${GATEWAY}/chat/completions`, ['sk-personal'])).toEqual([]);
   });
@@ -57,7 +58,8 @@ describe('every provider pool goes through the lock', () => {
     }
   });
 
-  it('openai-compatible on the gateway uses one account key, not a rotation through several', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('openai-compatible on the gateway uses one account key, not a rotation through several', () => {
     process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL = GATEWAY;
     process.env.CLAUDE_MEM_OPENAI_COMPAT_MODEL = 'cmem-observer';
     process.env.CLAUDE_MEM_OPENAI_COMPAT_API_KEY = CM_A;
@@ -95,7 +97,8 @@ describe('every provider pool goes through the lock', () => {
     expect(isGeminiAvailable()).toBe(false);
   });
 
-  it('keeps OpenRouter as it was: one key on the gateway, no account keys elsewhere', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('keeps OpenRouter as it was: one key on the gateway, no account keys elsewhere', () => {
     process.env.CLAUDE_MEM_OPENROUTER_BASE_URL = GATEWAY;
     process.env.CLAUDE_MEM_OPENROUTER_API_KEY = CM_A;
     process.env.CLAUDE_MEM_OPENROUTER_API_KEYS = CM_B;

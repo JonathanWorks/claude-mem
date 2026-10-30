@@ -76,7 +76,7 @@ ${getPrompt(mode, 'footer')}`;
 /**
  * The observer instructions every init and continuation prompt opens with.
  *
- * A provider prompt cache (OpenRouter, the cmem.ai gateway) hits only on a
+ * A provider prompt cache (OpenRouter, the hosted gateway) hits only on a
  * byte-identical prefix. This block depends on the mode alone, so it goes
  * first and everything per-session (prior context, the user's request, the
  * continuation greeting, dates, project names) follows it: every generation,

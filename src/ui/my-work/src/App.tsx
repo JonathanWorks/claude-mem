@@ -1,9 +1,8 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { MotionConfig } from 'motion/react'
-import { InboxIcon, ListChecksIcon, UsersIcon } from 'lucide-react'
+import { InboxIcon, ListChecksIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -60,22 +59,9 @@ function HeaderBody({ visible, children }: { visible?: boolean; children: ReactN
   )
 }
 
-/** TeamBrain is a switch on the same GUI; turning it on is where the team plan is bought (§9). */
-function TeamSwitch({ team, onChange }: { team: boolean; onChange: (team: boolean) => void }) {
-  return (
-    <Req ids={['R9.1', 'R9.4']}>
-      <HoverCard openDelay={100}>
-        <HoverCardTrigger asChild>
-          <Button variant={team ? 'secondary' : 'ghost'} size="sm" className={cn('px-2 text-xs', team && 'bg-accent text-accent-foreground hover:bg-accent')} onClick={() => onChange(!team)}><UsersIcon />Team</Button>
-        </HoverCardTrigger>
-        <HoverCardContent className="w-64 space-y-2 text-xs">
-          <p className="font-medium">TeamBrain</p>
-          <p className="text-muted-foreground">See everyone’s requests on one board, with who asked and where work collides.</p>
-          {!team && <Button size="sm" className="w-full">Start team plan</Button>}
-        </HoverCardContent>
-      </HoverCard>
-    </Req>
-  )
+/** PWM fork: the team plan upsell is removed; the switch renders nothing. */
+function TeamSwitch(_props: { team: boolean; onChange: (team: boolean) => void }) {
+  return null
 }
 
 const SetupPage = lazy(() => import('@/setup/setup-page'))
@@ -146,7 +132,7 @@ function LoadedApp() {
                 {sample && <Req ids={['R13.1']}>
                   <ToggleGroup type="single" size="sm" variant="outline" spacing={1} className="flex-nowrap" value={workspace.mode} onValueChange={(mode) => mode && setWorkspace({ mode: mode as 'home' | 'web', connected: mode === 'web' || workspace.connected })}>
                     <ToggleGroupItem value="home" className="h-7 text-xs">At home<span className="hidden md:inline">· localhost:37777</span></ToggleGroupItem>
-                    <ToggleGroupItem value="web" className="h-7 text-xs">On the go<span className="hidden md:inline">· cmem.ai</span></ToggleGroupItem>
+                    <ToggleGroupItem value="web" className="h-7 text-xs">On the go<span className="hidden md:inline">· the hosted service</span></ToggleGroupItem>
                   </ToggleGroup>
                 </Req>}
                 <div className="ml-auto flex items-center gap-3">

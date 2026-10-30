@@ -75,7 +75,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): SyncApiEnv {
 	}
 	return {
 		DATABASE_URL: forwardOrigin === null ? databaseUrl : "",
-		TOKEN_VERIFY_URL: (source.TOKEN_VERIFY_URL ?? "https://cmem.ai/api/pro/sync/verify").trim(),
+		TOKEN_VERIFY_URL: (source.TOKEN_VERIFY_URL ?? "").trim(),
 		AUTH_CACHE_TTL_SECONDS: (source.AUTH_CACHE_TTL_SECONDS ?? String(AUTH_CACHE_TTL_DEFAULT_SECONDS)).trim(),
 		INTERNAL_PROJECTOR_URL: (source.INTERNAL_PROJECTOR_URL ?? "").trim(),
 		CMEM_INTERNAL_PROJECTOR_SECRET: (source.CMEM_INTERNAL_PROJECTOR_SECRET ?? "").trim(),

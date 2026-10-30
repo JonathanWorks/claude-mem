@@ -761,7 +761,8 @@ describe('openai-compatible keys go through the cmem key lock', () => {
     expect(resolveOpenAICompatConfig().apiKeys).toEqual(['nvapi-1', 'nvapi-2']);
   });
 
-  it('never sends a personal key to the cmem gateway', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never sends a personal key to the cmem gateway', () => {
     process.env.CLAUDE_MEM_OPENAI_COMPAT_PRESET = 'custom';
     process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL = 'https://cmem.ai/api/inference/v1';
     process.env.CLAUDE_MEM_OPENAI_COMPAT_API_KEY = 'nvapi-personal';

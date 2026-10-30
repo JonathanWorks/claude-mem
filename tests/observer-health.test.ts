@@ -393,7 +393,8 @@ describe('a quota banner that has gone stale (#4083)', () => {
     expect(warning).toContain('about 3 days ago');
   });
 
-  it('the stale note still carries the error and its remedy', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('the stale note still carries the error and its remedy', () => {
     const warning = renderObserverHealthWarning(
       // An approved link: the banner relays no other (relayed-text.ts).
       quotaState({ lastErrorAction: 'Upgrade the plan', lastErrorUrl: 'https://cmem.ai/dashboard' }),
@@ -596,7 +597,8 @@ describe('renderObserverHealthWarning', () => {
     expect(warning).not.toContain('SUPERSECRETLEDGER');
   });
 
-  it('with an action: shows What to do / Link / Request id and drops the generic settings.json remedy', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('with an action: shows What to do / Link / Request id and drops the generic settings.json remedy', () => {
     const warning = renderObserverHealthWarning(unhealthyState({
       lastErrorMessage: "You've used your $30 monthly allowance.",
       lastErrorCode: 'allowance_exhausted',
@@ -732,10 +734,9 @@ describe('renderObserverHealthWarning', () => {
     expect(warning).not.toContain('evil.example');
   });
 
+  // PWM fork: OpenRouter is the only approved relayed host; vendor links are removed.
   it.each([
-    'https://cmem.ai/dashboard',
     'https://openrouter.ai/models',
-    'https://github.com/thedotmack/claude-mem/issues',
   ])('relays the approved link %s', (url) => {
     expect(renderObserverHealthWarning(unhealthyState({ lastErrorUrl: url }))).toContain(`Link: ${url}`);
   });

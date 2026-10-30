@@ -129,7 +129,8 @@ describe('the canonical URL still identifies the cmem gateway', () => {
     }
   };
 
-  it('for the production gateway, whatever the host case or explicit default port', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('for the production gateway, whatever the host case or explicit default port', () => {
     withOrigin(undefined, () => {
       for (const base of ['https://cmem.ai/api/inference/v1', 'https://CMEM.ai:443/api/inference/v1/']) {
         expect(isCmemGatewayUrl(resolveOpenRouterChatCompletionsUrl(base))).toBe(true);
@@ -137,7 +138,8 @@ describe('the canonical URL still identifies the cmem gateway', () => {
     });
   });
 
-  it('for a dev gateway whose CMEM_PRO_ORIGIN carries a base path', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('for a dev gateway whose CMEM_PRO_ORIGIN carries a base path', () => {
     withOrigin('http://localhost:3005/mock', () => {
       const apiUrl = resolveOpenRouterChatCompletionsUrl('http://localhost:3005/mock/api/inference/v1');
       expect(apiUrl).toBe('http://localhost:3005/mock/api/inference/v1/chat/completions');

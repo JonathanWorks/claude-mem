@@ -146,7 +146,7 @@ export function parseTimeoutMs(raw: unknown, keyName: string, fallbackMs: number
  * The deadline catches a hung request; it must sit above normal latency, or it
  * abandons work the backend already computed — and, on a metered backend, work
  * that can still be billed. The old 30s did exactly that twice over: an Ollama
- * backend measured a p99 of 29.8s (#3794), and the cmem.ai gateway runs p90
+ * backend measured a p99 of 29.8s (#3794), and the hosted gateway runs p90
  * 40–72s, p99 ~100–140s, so ~20% of its served requests were cut off. The
  * default (DEFAULT_LLM_TIMEOUT_MS) now clears that tail; see its note.
  *

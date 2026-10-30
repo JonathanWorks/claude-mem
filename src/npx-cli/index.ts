@@ -25,7 +25,7 @@ ${styleText('bold', 'Install Commands')} (no Bun required):
   ${styleText('cyan', 'npx claude-mem install')}              Interactive install (also puts the claude-mem hook launcher on PATH)
   ${styleText('cyan', 'npx claude-mem install --ide <id>')}   Install for specific IDE
   ${styleText('cyan', 'npx claude-mem install --ide dsh --dsh-profile <name>')}   Install DeepSeek Harness (default profile: web)
-  ${styleText('cyan', 'npx claude-mem install --provider claude|codex|gemini|openrouter|host')}   Set LLM provider (optional non-interactively; a fresh install defaults to claude). codex, gemini and openrouter need a cmem.ai sign-in in a browser, on either runtime; claude and host need no claude-mem account
+  ${styleText('cyan', 'npx claude-mem install --provider claude|codex|gemini|openrouter|host')}   Set LLM provider (optional non-interactively; a fresh install defaults to claude). codex, gemini and openrouter need a the hosted service sign-in in a browser, on either runtime; claude and host need no claude-mem account
   ${styleText('cyan', 'npx claude-mem install --model <id>')}   Set Claude or Codex model (when provider=claude|codex)
   ${styleText('cyan', 'npx claude-mem install --no-auto-start')}   Skip worker auto-start at the end
   ${styleText('cyan', 'npx claude-mem install --disable-auto-memory')}   Explicitly disable Claude Code native auto-memory
@@ -62,11 +62,6 @@ ${styleText('bold', 'Runtime Commands')} (requires Bun, delegates to installed p
   ${styleText('cyan', 'npx claude-mem kimi install|status|uninstall')}   Manage Kimi Code CLI hooks + MCP config
   ${styleText('cyan', 'npx claude-mem t3code status|uninstall [--settings <path>]')}   Inspect or disable T3 Code provider plugins
   ${styleText('cyan', 'npx claude-mem pi install|status|uninstall')}   Manage the native Pi extension
-
-${styleText('bold', 'TeamBrain')} (one shared brain for your team; your own memory stays private):
-  ${styleText('cyan', 'npx claude-mem teambrain start')}                Create a team on cmem.ai
-  ${styleText('cyan', 'npx claude-mem teambrain join <invite-link>')}   Join a team, then choose which projects to share
-  ${styleText('cyan', 'npx claude-mem teambrain status|share|leave')}   Check your teams, change what you share, or leave
 
 ${styleText('bold', 'Claude Code Hooks')}:
   Each hook runs ${styleText('cyan', 'claude-mem hook claude-code <event>')} directly, with no shell.
@@ -227,12 +222,6 @@ async function main(): Promise<void> {
     case 'telemetry': {
       const { runTelemetryCommand } = await import('./commands/telemetry.js');
       await runTelemetryCommand(args.slice(1));
-      break;
-    }
-
-    case 'teambrain': {
-      const { runTeamBrainCommand } = await import('./commands/teambrain.js');
-      process.exitCode = await runTeamBrainCommand(args.slice(1));
       break;
     }
 

@@ -12,17 +12,14 @@ Search past work across all sessions. Use the original three-step mem-search wor
 The examples below use the local worker tools. Native Pi and DSH integrations
 name the same three steps `mem_search`, `mem_timeline`, and
 `mem_get_observations`. Native OpenCode uses `claude_mem_search`,
-`claude_mem_timeline`, and `claude_mem_get_observations`. CMEM Pro uses `memory_search`, `timeline`, and
-`get_observations`; use the parameter names advertised by that connection.
+`claude_mem_timeline`, and `claude_mem_get_observations`.
 
 A self-hosted server runtime uses the same three steps: `search`, `timeline`,
 and `get_observations`, scoped to the configured server project. Server
 observation IDs are strings. Set `projectId` only when selecting another
 authorized server project. Dumb search is unavailable in server runtime. A direct self-hosted `/v1/mcp`
 connection instead requires `projectId` on each call and `anchorId` for its
-timeline. CMEM Pro also uses `anchorId` for timeline context, and uses
-`get_summaries` when the selected index rows are session summaries. Follow the
-active connection’s advertised schema.
+timeline. Follow the active connection’s advertised schema.
 
 ## When to Use
 

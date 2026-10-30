@@ -8,7 +8,7 @@
  * See src/shared/openai-compat-presets.ts for why this is a provider of its own
  * rather than another special case inside the OpenRouter client. The short
  * version: OpenRouter's client sends openrouter.ai attribution headers and
- * carries the cmem.ai gateway's credential-pinning rules, and neither should
+ * carries the hosted gateway's credential-pinning rules, and neither should
  * follow a user to NVIDIA.
  *
  * The body is model, messages, temperature, the output-token cap, the standard
@@ -447,7 +447,7 @@ export function resolveOpenAICompatConfig(
   const apiKeys = keysForEndpoint(apiUrl, configuredKeys);
   if (apiKeys.length < configuredKeys.length && lastWithheldKeyUrl !== apiUrl) {
     lastWithheldKeyUrl = apiUrl;
-    logger.warn('SDK', 'Withholding openai-compatible keys: the cmem gateway takes one cmem.ai memory key (cm_pro_) and never a pool, and a cm_pro_ key never goes to any other host. Set CLAUDE_MEM_OPENAI_COMPAT_API_KEY to the key this endpoint issued.');
+    logger.warn('SDK', 'Withholding openai-compatible keys: the cmem gateway takes one hosted memory key (cm_pro_) and never a pool, and a cm_pro_ key never goes to any other host. Set CLAUDE_MEM_OPENAI_COMPAT_API_KEY to the key this endpoint issued.');
   }
 
   // The preset's answer only stands while the preset's endpoint does. Once the

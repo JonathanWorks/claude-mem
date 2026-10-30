@@ -63,7 +63,7 @@ export type FieldCompressor = (
  *
  * The pass is one request to the same backend as the observer request, and the
  * heaviest one: the whole oversized field in, up to FIELD_OPTIMIZE_TARGET_RATIO
- * of the field cap back. At 30s it expired on the cmem.ai gateway's ordinary
+ * of the field cap back. At 30s it expired on the hosted gateway's ordinary
  * latency (p90 40–72s by day) and truncated, while the abandoned request could
  * still be billed. So it gets the observer request's deadline
  * (DEFAULT_LLM_TIMEOUT_MS): above the gateway's worst daily p99, below its own

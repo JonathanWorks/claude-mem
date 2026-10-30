@@ -4,7 +4,6 @@ import {
   SERVER_BETA_ONLY_TOOL_NAMES,
   TEAMBRAIN_TOOL_NAMES,
   withoutDisabledWorkStateTools,
-  withoutUnjoinedTeamBrainTools,
   WORK_STATE_TOOL_NAMES,
 } from '../../src/servers/mcp-tool-visibility.js';
 
@@ -74,14 +73,4 @@ describe('MCP runtime-aware tool visibility', () => {
     }
   });
 
-  it('advertises the team_* tools only once this install has joined a TeamBrain team', () => {
-    const unjoined = new Set(withoutUnjoinedTeamBrainTools(allTools, false).map(tool => tool.name));
-    const joined = new Set(withoutUnjoinedTeamBrainTools(allTools, true).map(tool => tool.name));
-
-    for (const toolName of TEAMBRAIN_TOOL_NAMES) {
-      expect(unjoined.has(toolName)).toBe(false);
-      expect(joined.has(toolName)).toBe(true);
-    }
-    expect(unjoined.has('search')).toBe(true);
-  });
 });

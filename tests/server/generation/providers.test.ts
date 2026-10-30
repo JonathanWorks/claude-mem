@@ -729,7 +729,8 @@ describe('OpenRouterObservationProvider', () => {
   // job failed. The worker sends stream:false since #3668; the server now does
   // too, except to the cmem gateway, which never streams unasked. `stream` is
   // protected from CLAUDE_MEM_OPENROUTER_EXTRA_BODY, so this was the only fix.
-  it('asks for one JSON body (stream:false), except from the cmem gateway', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('asks for one JSON body (stream:false), except from the cmem gateway', async () => {
     const bodyFor = async (baseUrl?: string): Promise<Record<string, unknown>> => {
       let body: Record<string, unknown> = {};
       const provider = new OpenRouterObservationProvider({

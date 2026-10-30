@@ -8,7 +8,8 @@ import { join } from 'node:path';
 // controlled prompts and an in-process worker that serves the real setup endpoints, and plays the browser itself.
 if (process.env.CLAUDE_MEM_BROWSER_SETUP_FIXTURE_CHILD !== import.meta.path) {
   describe('isolated browser-setup installer fixture', () => {
-    it('passes every case in a fresh Bun process', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('passes every case in a fresh Bun process', () => {
       const child = Bun.spawnSync({
         cmd: [process.execPath, 'test', '--timeout', '30000', import.meta.path],
         cwd: join(import.meta.dir, '..', '..'),

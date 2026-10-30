@@ -1,5 +1,5 @@
 /**
- * Forward mode (Phase 12 step 5): `sync.cmem.ai` keeps answering every
+ * Forward mode (Phase 12 step 5): the hub keeps answering every
  * shipped client, but each /v1/sync/* request is proxied verbatim to the
  * Supabase `cmem-sync` Edge Function. No Postgres, no auth here — the
  * upstream authenticates. Same idea as workers/sync-hub FORWARD_ORIGIN.

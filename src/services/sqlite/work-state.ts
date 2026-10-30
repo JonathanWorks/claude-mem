@@ -92,7 +92,7 @@ export function appendWorkStateEntry(
 
 /**
  * Every entry stored under these project keys (and one list, when named), in
- * write order, the order cmem.ai folds in: the write clock, then the writing
+ * write order, the order the hosted service folds in: the write clock, then the writing
  * device, then its rowid there. A row pulled from another device replays where
  * it was written rather than where it landed. A native row is this device's
  * (`localDeviceId`), so every device orders the same rows the same way, even

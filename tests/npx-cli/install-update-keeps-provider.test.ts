@@ -153,7 +153,8 @@ describe('npx claude-mem update keeps the configured provider', () => {
     expect(readFileSync(USER_SETTINGS_PATH, 'utf-8')).toBe(before);
   });
 
-  it('holds the gateway to its saved key: an exported key or a pool does not count', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('holds the gateway to its saved key: an exported key or a pool does not count', async () => {
     writeSettings({
       ...ACCOUNT_SETTINGS,
       CLAUDE_MEM_PROVIDER: 'openrouter',

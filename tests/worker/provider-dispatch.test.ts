@@ -98,7 +98,8 @@ describe('provider-dispatch', () => {
       expect(getSelectedProvider()).toBe('openrouter');
     });
 
-    it('returns claude when the fallback marker is set on a cmem-gateway config', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('returns claude when the fallback marker is set on a cmem-gateway config', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: new Date().toISOString() });
       expect(getSelectedProvider()).toBe('claude');
     });
@@ -158,13 +159,15 @@ describe('provider-dispatch', () => {
       return new Date(Date.now() - CMEM_FALLBACK_RETRY_MS - 1_000).toISOString();
     }
 
-    it('keeps every caller on claude, claim-free, while the fallback window is fresh', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('keeps every caller on claude, claim-free, while the fallback window is fresh', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: new Date().toISOString() });
       const selections = Array.from({ length: 5 }, select);
       expect(selections).toEqual(Array.from({ length: 5 }, () => ({ provider: 'claude', gatewayProbeClaimId: null })));
     });
 
-    it('admits exactly one of N concurrent callers once the window elapses', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('admits exactly one of N concurrent callers once the window elapses', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: elapsedFallbackAt() });
       const selections = Array.from({ length: 10 }, select);
 
@@ -174,7 +177,8 @@ describe('provider-dispatch', () => {
       expect(selections.filter(selection => selection.provider === 'claude')).toHaveLength(9);
     });
 
-    it('re-admits a caller only after the probe releases its own claim', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('re-admits a caller only after the probe releases its own claim', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: elapsedFallbackAt() });
       const probe = select();
       expect(probe.provider).toBe('openrouter');
@@ -191,7 +195,8 @@ describe('provider-dispatch', () => {
       expect(next.gatewayProbeClaimId).not.toBe(probe.gatewayProbeClaimId);
     });
 
-    it('lets a stale probe be taken over, so a lost claim cannot wedge the gateway shut', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('lets a stale probe be taken over, so a lost claim cannot wedge the gateway shut', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: elapsedFallbackAt() });
       const probe = select();
       expect(probe.provider).toBe('openrouter');
@@ -206,7 +211,8 @@ describe('provider-dispatch', () => {
       expect(select().provider).toBe('claude');
     });
 
-    it('stays on claude, claim-free, while an openrouter breaker outlives the fallback window, then probes', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('stays on claude, claim-free, while an openrouter breaker outlives the fallback window, then probes', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: elapsedFallbackAt() });
       // The start gate would refuse any gateway run while this breaker is live.
       const armedAt = Date.now() - 20 * 60_000;
@@ -274,7 +280,8 @@ describe('provider-dispatch', () => {
       });
     }
 
-    it('records the fallback for a 402 allowance_exhausted from the cmem gateway', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('records the fallback for a 402 allowance_exhausted from the cmem gateway', () => {
       pinOpenRouterEnv();
       const error = gatewayError(402, 'allowance_exhausted');
       expect(error.kind).toBe('quota_exhausted');
@@ -286,7 +293,8 @@ describe('provider-dispatch', () => {
       expect(Number.isNaN(Date.parse(persisted.CLAUDE_MEM_PRO_FALLBACK_AT))).toBe(false);
     });
 
-    it('stores the gateway\'s own message and link with the marker, for the session-start notice', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('stores the gateway\'s own message and link with the marker, for the session-start notice', () => {
       pinOpenRouterEnv();
       const error = classifyOpenRouterError({
         status: 402,
@@ -308,7 +316,8 @@ describe('provider-dispatch', () => {
       expect(persisted.CLAUDE_MEM_PRO_FALLBACK_URL).toBe('https://cmem.ai/dashboard');
     });
 
-    it('stores no words for a legacy (no-envelope) 402, so the notice stays plan-neutral', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('stores no words for a legacy (no-envelope) 402, so the notice stays plan-neutral', () => {
       pinOpenRouterEnv();
       writeFileSync(settingsPath, JSON.stringify({
         CLAUDE_MEM_PRO_FALLBACK_MESSAGE: 'stale words from an earlier fallback',
@@ -325,7 +334,8 @@ describe('provider-dispatch', () => {
       expect(persisted.CLAUDE_MEM_PRO_FALLBACK_URL).toBe('');
     });
 
-    it('does not rewrite the marker while the fallback window is already running', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('does not rewrite the marker while the fallback window is already running', () => {
       const armedAt = new Date(Date.now() - 60_000).toISOString();
       pinOpenRouterEnv();
       delete process.env.CLAUDE_MEM_PRO_FALLBACK_AT;
@@ -336,7 +346,8 @@ describe('provider-dispatch', () => {
       expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).CLAUDE_MEM_PRO_FALLBACK_AT).toBe(armedAt);
     });
 
-    it('records the fallback for a key_invalid gateway rejection', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('records the fallback for a key_invalid gateway rejection', () => {
       pinOpenRouterEnv();
       const error = gatewayError(401, 'key_invalid');
       expect(error.kind).toBe('auth_invalid');
@@ -345,7 +356,8 @@ describe('provider-dispatch', () => {
       expect(recordCmemFallbackIfEligible(error, null, settingsPath)).toBe(true);
     });
 
-    it('records the fallback for a legacy (no-envelope) 402 on the gateway config', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('records the fallback for a legacy (no-envelope) 402 on the gateway config', () => {
       pinOpenRouterEnv();
       const error = classifyOpenRouterError({
         status: 402,
@@ -374,7 +386,8 @@ describe('provider-dispatch', () => {
       expect(persisted.CLAUDE_MEM_PRO_FALLBACK_AT).toBe('');
     });
 
-    it('records the fallback for subscription_inactive — a lapsed, cancelled, or unpaid trial', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('records the fallback for subscription_inactive — a lapsed, cancelled, or unpaid trial', () => {
       pinOpenRouterEnv();
       const error = gatewayError(402, 'subscription_inactive');
       expect(error.kind).toBe('auth_invalid');
@@ -383,7 +396,8 @@ describe('provider-dispatch', () => {
       expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).CLAUDE_MEM_PRO_FALLBACK_AT).not.toBe('');
     });
 
-    it.each([401, 403])('records the fallback for a %i the gateway sent without an envelope (an edge or WAF page)', (status) => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip.each([401, 403])('records the fallback for a %i the gateway sent without an envelope (an edge or WAF page)', (status) => {
       pinOpenRouterEnv();
       const error = classifyOpenRouterError({ status, bodyText: '<html>Access denied</html>', cause: new Error(`upstream ${status}`) });
       expect(error.kind).toBe('auth_invalid');
@@ -489,7 +503,8 @@ describe('provider-dispatch', () => {
       expect(selectProviderForGenerator().provider).toBe('gemini');
     });
 
-    it('skips the cmem gateway as a fallback only inside its trial-expiry window', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('skips the cmem gateway as a fallback only inside its trial-expiry window', () => {
       pinGeminiPrimary('openrouter', {
         CLAUDE_MEM_OPENROUTER_BASE_URL: CMEM_GATEWAY_BASE,
         CLAUDE_MEM_OPENROUTER_API_KEY: CMEM_MEMORY_KEY,
@@ -503,7 +518,8 @@ describe('provider-dispatch', () => {
       expect(selectProviderForGenerator()).toEqual({ provider: 'openrouter', gatewayProbeClaimId: null, fallbackFrom: 'gemini' });
     });
 
-    it('re-probes a refusing gateway fallback once per window, through the single gateway probe claim', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('re-probes a refusing gateway fallback once per window, through the single gateway probe claim', () => {
       // One subscription_inactive must not disqualify the gateway forever:
       // once the marker's window elapses, exactly one caller tries it again.
       pinGeminiPrimary('openrouter', {
@@ -582,7 +598,8 @@ describe('provider-dispatch', () => {
       expect(selectProviderForGenerator().provider).toBe('claude');
     });
 
-    it('leaves the cmem-gateway fallback branch untouched', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('leaves the cmem-gateway fallback branch untouched', () => {
       pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: new Date().toISOString() });
       process.env.CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER = 'gemini';
       process.env.CLAUDE_MEM_GEMINI_API_KEY = 'gemini-test-key';

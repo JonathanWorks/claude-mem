@@ -144,12 +144,14 @@ describe('installer OAuth start failure classification', () => {
     }
   };
 
-  it('labels a non-2xx response http_error', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('labels a non-2xx response http_error', async () => {
     expect(await withFetch(async () => new Response('', { status: 503 }))).toBeNull();
     expect(lastOAuthStartFailure()).toBe('http_error');
   });
 
-  it('retains the server error message for the caller to show', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('retains the server error message for the caller to show', async () => {
     expect(await withFetch(async () => Response.json({
       error: 'intent_credentials_invalid', message: 'This installation credential was not accepted.',
     }, { status: 401 }))).toBeNull();
@@ -157,7 +159,8 @@ describe('installer OAuth start failure classification', () => {
     expect(lastOAuthStartErrorMessage()).toBe('This installation credential was not accepted.');
   });
 
-  it('sends persisted install headers only to the existing OAuth start endpoint', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends persisted install headers only to the existing OAuth start endpoint', async () => {
     const credentials = { install_id: '1'.repeat(32), intent_token: '2'.repeat(64) };
     const requests: string[] = [];
     const pairing = await withFetch(async (init, url) => {
@@ -170,7 +173,8 @@ describe('installer OAuth start failure classification', () => {
     expect(requests).toEqual(['https://cmem.ai/api/installer/oauth/start']);
   });
 
-  it('keeps OAuth start compatible without an install identity and never issues one', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('keeps OAuth start compatible without an install identity and never issues one', async () => {
     const requests: string[] = [];
     const pairing = await withFetch(async (init, url) => {
       requests.push(url!);
@@ -182,7 +186,8 @@ describe('installer OAuth start failure classification', () => {
     expect(requests).toEqual(['https://cmem.ai/api/installer/oauth/start']);
   });
 
-  it('refuses an invalid explicit install identity before any network request', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('refuses an invalid explicit install identity before any network request', async () => {
     let requests = 0;
     expect(await withFetch(async () => {
       requests++;
@@ -193,7 +198,8 @@ describe('installer OAuth start failure classification', () => {
     expect(lastOAuthStartErrorMessage()).toContain('Hosted intent credentials are invalid');
   });
 
-  it('labels a 2xx with malformed JSON bad_body, not network', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('labels a 2xx with malformed JSON bad_body, not network', async () => {
     expect(await withFetch(async () => new Response('<html>not json</html>', {
       status: 200,
       headers: { 'content-type': 'text/html' },
@@ -201,12 +207,14 @@ describe('installer OAuth start failure classification', () => {
     expect(lastOAuthStartFailure()).toBe('bad_body');
   });
 
-  it('labels a 2xx whose JSON fails the pairing contract bad_body', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('labels a 2xx whose JSON fails the pairing contract bad_body', async () => {
     expect(await withFetch(async () => Response.json({ pairing_id: 'nope' }))).toBeNull();
     expect(lastOAuthStartFailure()).toBe('bad_body');
   });
 
-  it('labels a thrown fetch network and an abort timeout', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('labels a thrown fetch network and an abort timeout', async () => {
     expect(await withFetch(async () => { throw new TypeError('fetch failed'); })).toBeNull();
     expect(lastOAuthStartFailure()).toBe('network');
 
@@ -220,7 +228,8 @@ describe('installer OAuth start failure classification', () => {
     expect(lastOAuthStartFailure()).toBe('timeout');
   });
 
-  it('labels an abort that fires while the 2xx body is still streaming timeout, not bad_body', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('labels an abort that fires while the 2xx body is still streaming timeout, not bad_body', async () => {
     expect(await withFetch((init) => {
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -237,7 +246,8 @@ describe('installer OAuth start failure classification', () => {
     expect(lastOAuthStartFailure()).toBe('timeout');
   });
 
-  it('clears the failure and sends the deferred source on success', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('clears the failure and sends the deferred source on success', async () => {
     const seen: string[] = [];
     const pairing = await withFetch(async (init) => {
       seen.push(String(init?.body));
@@ -251,7 +261,8 @@ describe('installer OAuth start failure classification', () => {
 });
 
 describe('installer trial-ready contract', () => {
-  it('parses an OAuth-only pairing without accepting an email or identity', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('parses an OAuth-only pairing without accepting an email or identity', () => {
     expect(parseInstallerOAuthStartBody({
       ...validStartBody,
       email: 'must-not-be-read@example.com',
@@ -265,7 +276,8 @@ describe('installer trial-ready contract', () => {
     });
   });
 
-  it('derives an absolute poll deadline from expires_in, clamped to 30 minutes', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('derives an absolute poll deadline from expires_in, clamped to 30 minutes', () => {
     const before = Date.now();
     const parsed = parseInstallerOAuthStartBody({ ...validStartBody, expires_in: 1800 });
     const after = Date.now();
@@ -282,7 +294,8 @@ describe('installer trial-ready contract', () => {
     expect(parseInstallerOAuthStartBody({ ...validStartBody, expires_in: -5 })).not.toHaveProperty('expiresAt');
   });
 
-  it('prints only the login-only link for a deferred non-interactive sign-in', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('prints only the login-only link for a deferred non-interactive sign-in', () => {
     const { output, exitCode } = runDeferredLoginChild(200, {}, ['CI']);
     expect(exitCode, output).toBe(0);
     expect(output).toContain('__FETCH_CALLED__');
@@ -295,7 +308,8 @@ describe('installer trial-ready contract', () => {
     expect(output).toContain('__DEFERRED_DONE__');
   });
 
-  it('reports an optional sign-in failure and preserves the completed install exit status', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('reports an optional sign-in failure and preserves the completed install exit status', () => {
     const { output, exitCode } = runDeferredLoginChild(503, {}, ['CI']);
     expect(exitCode, output).toBe(0);
     expect(output).toContain('__FETCH_CALLED__');
@@ -305,7 +319,8 @@ describe('installer trial-ready contract', () => {
     expect(output).toContain('__DEFERRED_DONE__');
   });
 
-  it('shows the server error message when optional sign-in rejects the install identity', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('shows the server error message when optional sign-in rejects the install identity', () => {
     const { output, exitCode } = runDeferredLoginChild(401, {}, ['CI'], {
       responseBody: { error: 'intent_credentials_invalid', message: 'This installation credential was not accepted.' },
     });
@@ -315,7 +330,8 @@ describe('installer trial-ready contract', () => {
     expect(output).not.toContain('Sign-in link:');
   });
 
-  it('shows local credential errors at optional sign-in without sending a request', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('shows local credential errors at optional sign-in without sending a request', () => {
     const { output, exitCode } = runDeferredLoginChild(200, {}, ['CI'], {
       credentials: { install_id: '1'.repeat(32) },
     });
@@ -373,7 +389,8 @@ describe('installer trial-ready contract', () => {
     expect(parseInstallerOAuthStartBody({ ...valid, user_code: 'INVALID1' })).toBeNull();
   });
 
-  it('uses the exact two-option provider copy', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('uses the exact two-option provider copy', () => {
     expect(buildProviderLabels()).toEqual({
       cmem: 'CMEM Pro (30 Day Free Trial: Tokens for Observations + Real-Time Cloud Sync '
         + 'for Claude.ai, ChatGPT.com, anything that accepts an MCP Connector)',
@@ -384,7 +401,8 @@ describe('installer trial-ready contract', () => {
     expect(PROVIDER_PROMPT_MESSAGE).toBe('Select Provider:\n================');
   });
 
-  it('keeps each provider description in the label so both rows always render it', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('keeps each provider description in the label so both rows always render it', () => {
     // clack's multiselect renders `hint` only for the focused/selected row, so a
     // description placed there would appear one row at a time. Both rows must
     // carry their own description at all times.
@@ -483,7 +501,8 @@ describe('installer trial-ready contract', () => {
     });
   });
 
-  it('reads a TeamBrain seat holder: sync only, the team and its TeamBrain address', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('reads a TeamBrain seat holder: sync only, the team and its TeamBrain address', () => {
     expect(parseTrialReadyBody({
       status: 'ready',
       user_id: 'seat_user',
@@ -568,7 +587,8 @@ describe('installer trial-ready contract', () => {
     });
   });
 
-  it('stages one-shot credentials atomically without choosing a provider', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('stages one-shot credentials atomically without choosing a provider', () => {
     const settings = buildTrialReadySettings({
       userId: 'user_123',
       setupToken: 'setup_secret',
@@ -657,7 +677,8 @@ describe('installer trial-ready contract', () => {
     });
   });
 
-  it('keeps the provider when CMEM Pro is chosen for a seat-only account, promoting no staged gateway key', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('keeps the provider when CMEM Pro is chosen for a seat-only account, promoting no staged gateway key', () => {
     const script = `
       const { writeFileSync, readFileSync } = await import('fs');
       const { USER_SETTINGS_PATH } = await import('./src/shared/paths.ts');

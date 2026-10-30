@@ -33,7 +33,7 @@ import type { InstallerStage } from './setup-flow'
 export type { Persona, SetupScanUsage, SetupUsage, UsageCoverage } from './setup-usage'
 
 export interface SetupHistory { projects: number; sessions: number; observations: number }
-/** The worker's history upload. `imported` counts observations cmem.ai wrote; `error` is why a run stopped. */
+/** The worker's history upload. `imported` counts observations the hosted service wrote; `error` is why a run stopped. */
 export interface HistoryImportProgress { percent: number; done: boolean; imported: number; error: string | null }
 
 export type { MemoryResult } from './setup-search'
@@ -268,9 +268,9 @@ export const localSetupSource: SetupSource = {
 }
 
 /** D6 plan prices, in cents. Plan prices only, never per-run spend. */
-export const PLAN = { name: 'CMEM Pro', monthlyCents: 3000, cloudSyncCents: 1200 } as const
+export const PLAN = { name: '', monthlyCents: 0, cloudSyncCents: 0 } as const
 
-export const CMEM_MCP_URL = 'https://cmem.ai/api/mcp'
+export const CMEM_MCP_URL = ''
 
 /** Finish Setup tools. Names, descriptions and steps come from the PROTO workspace tool list and CONNECTOR-EVIDENCE.md. */
 export interface SetupTool {
@@ -283,13 +283,8 @@ export interface SetupTool {
   commands?: string[]
   guide: { href: string; label: string }
 }
-export const SETUP_TOOLS: SetupTool[] = [
-  { id: 'claude-code', name: 'Claude Code', kind: 'local', mark: 'terminal', commands: ['claude mcp add --transport http --scope user cmem https://cmem.ai/api/mcp', 'claude mcp login cmem', 'claude mcp list'], guide: { href: 'https://code.claude.com/docs/en/mcp', label: 'Claude Code connection guide' } },
-  { id: 'claude-ai', name: 'Claude.ai', kind: 'cloud', mark: 'claude', steps: ['Open Customize, then Connectors, and choose + Add.', 'Choose Add custom connector, name it CMEM, paste the URL, and continue.', 'Complete the OAuth sign-in and add the connector. Enable it in a chat from +, then Connectors.'], guide: { href: 'https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp', label: 'Claude connection guide' } },
-  { id: 'codex', name: 'Codex CLI', kind: 'local', mark: 'codex', commands: ['codex mcp add cmem --url https://cmem.ai/api/mcp', 'codex mcp login cmem', 'codex mcp list'], guide: { href: 'https://learn.chatgpt.com/docs/extend/mcp', label: 'Codex connection guide' } },
-  { id: 'gemini-cli', name: 'Gemini CLI', kind: 'cloud', mark: 'gemini', steps: ['Add CMEM as a remote HTTP MCP server.', 'Authenticate CMEM inside Gemini CLI, then check the available tools.'], commands: ['gemini mcp add --transport http --scope user cmem https://cmem.ai/api/mcp', '/mcp auth cmem', '/mcp list'], guide: { href: 'https://geminicli.com/docs/tools/mcp-server/', label: 'Gemini CLI connection guide' } },
-  { id: 'chatgpt', name: 'ChatGPT', kind: 'cloud', mark: 'chatgpt', steps: ['Open ChatGPT Plugins and choose +, then Add custom MCP server.', 'Paste the CMEM URL, choose OAuth, and create the plugin.', 'Review the available tools, install the plugin, then @mention it in a chat.'], guide: { href: 'https://developers.openai.com/plugins/deploy/connect-chatgpt', label: 'ChatGPT connection guide' } },
-]
+// PWM fork: every listed tool connected to the vendor's hosted MCP endpoint; none are offered.
+export const SETUP_TOOLS: SetupTool[] = []
 
 /** The scan's agent ids drawn with the brand marks brand.tsx has; any other agent gets the neutral mark. */
 export const agentToolFor = (agentId: string): AgentTool =>

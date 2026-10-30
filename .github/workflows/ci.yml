@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, pwm]
 
 jobs:
   build:
@@ -42,6 +42,10 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # PWM fork: nothing may phone home to the vendor or carry an upsell.
+      - name: No phone-home or upsell references
+        run: bash scripts/pwm-no-phone-home.sh
 
       # `npm run build` runs scripts/build-hooks.js, which enforces the worker
       # bundle-size guardrail (WORKER_SERVICE_MAX_BYTES, see #2584) and the MCP

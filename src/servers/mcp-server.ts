@@ -45,13 +45,10 @@ import {
 import { normalizePlatformSource } from '../shared/platform-source.js';
 import {
   getAdvertisedMcpToolsForRuntime,
-  TEAMBRAIN_TOOL_NAMES,
   withoutDisabledWorkStateTools,
-  withoutUnjoinedTeamBrainTools,
   WORK_STATE_TOOL_NAMES,
 } from './mcp-tool-visibility.js';
 import { loadFromFileOnce } from '../shared/hook-settings.js';
-import { teamBrainConnection } from '../shared/teambrain.js';
 import { isWorkStateEnabled } from '../shared/work-state-setting.js';
 import { getProjectContext, type ProjectContext } from '../utils/project-name.js';
 import { withCheckoutProjects } from './checkout-search-scope.js';
@@ -777,40 +774,6 @@ Optional Dumb search: \`dumb_search({query, project})\`. Doesn’t reason about 
     }),
   },
   {
-    name: 'team_brief',
-    description: "TeamBrain brief for a project: where teammates' work collides with yours, recent plans and decisions, who is active in it now, and work delegated to you. Params: project (defaults to this checkout).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        project: { type: 'string', description: 'Project name; defaults to this checkout' },
-      },
-      additionalProperties: false,
-    },
-    annotations: READ_ONLY_TOOL_ANNOTATIONS,
-    handler: async (args: any) => callWorker('/api/teambrain/brief', {
-      query: { project: args?.project || currentCheckout().primary },
-      text: true,
-    }),
-  },
-  {
-    name: 'team_search',
-    description: "Search what your team shared with TeamBrain: teammates' observations, plans and decisions across the projects they share. Params: query (required), limit.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'What to look for, up to 500 characters' },
-        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max results' },
-      },
-      required: ['query'],
-      additionalProperties: false,
-    },
-    annotations: READ_ONLY_TOOL_ANNOTATIONS,
-    handler: async (args: any) => callWorker('/api/teambrain/search', {
-      body: { query: args?.query, limit: args?.limit },
-      text: true,
-    }),
-  },
-  {
     name: 'session_start_context',
     description: 'Render the exact worker-mode SessionStart context for a project. Calls /api/context/inject and returns the same text hooks inject at startup. Params: project OR projects, platformSource, full, colors.',
     inputSchema: {
@@ -1169,10 +1132,6 @@ function workStateEnabled(): boolean {
   return isWorkStateEnabled(loadFromFileOnce().CLAUDE_MEM_WORK_STATE_ENABLED);
 }
 
-function teamBrainJoined(): boolean {
-  return teamBrainConnection(loadFromFileOnce()) !== null;
-}
-
 /**
  * One MCP Server. Over stdio there is exactly one; over HTTP every session gets its own.
  * `getCwd` returns the HTTP request's project directory. Stdio asks the client roots/list,
@@ -1195,10 +1154,7 @@ function createMcpServer(getCwd?: CwdResolver): Server {
   if (stdioCwd) server.setNotificationHandler(RootsListChangedNotificationSchema, async () => stdioCwd.markRootsStale());
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const advertisedTools = withoutUnjoinedTeamBrainTools(
-      withoutDisabledWorkStateTools(getAdvertisedMcpToolsForRuntime(tools, selectRuntime()), workStateEnabled()),
-      teamBrainJoined(),
-    );
+    const advertisedTools = withoutDisabledWorkStateTools(getAdvertisedMcpToolsForRuntime(tools, selectRuntime()), workStateEnabled());
     return {
       tools: advertisedTools.map(tool => ({
         name: tool.name,
@@ -1223,16 +1179,6 @@ function createMcpServer(getCwd?: CwdResolver): Server {
       };
       spoolWorkStateMcpResult(tool.name, result);
       return result;
-    }
-
-    if ((TEAMBRAIN_TOOL_NAMES as readonly string[]).includes(tool.name) && !teamBrainJoined()) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: 'TeamBrain is not set up on this install. Join a team with `npx claude-mem teambrain join <invite-link>`, or start one with `npx claude-mem teambrain start`.',
-        }],
-        isError: true
-      };
     }
 
     try {

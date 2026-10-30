@@ -202,7 +202,8 @@ describe('installer output and wire body', () => {
       .toEqual({ source: 'npx-installer', device_name: 'host', install_state: 'fresh' });
   });
 
-  it('sends the install context set by the install command in the start request', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends the install context set by the install command in the start request', async () => {
     const realFetch = globalThis.fetch;
     const bodies: string[] = [];
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

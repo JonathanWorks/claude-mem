@@ -121,7 +121,7 @@ export const BUILTIN_REDACTION_PATTERNS: RedactionPattern[] = [
   { name: 'stripe_key',      regex: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{24,}\b/g },
   { name: 'google_api_key',  regex: /\bAIza[0-9A-Za-z_-]{35}(?!\w)/g },
   // claude-mem's own credentials: server API keys (`cmem_` + 43 base64url
-  // chars, server-bootstrap.ts createRawApiKey) and cmem.ai Pro memory keys.
+  // chars, server-bootstrap.ts createRawApiKey) and the hosted service Pro memory keys.
   { name: 'claude_mem_key',  regex: /\bcmem_[A-Za-z0-9_-]{32,}|\bcm_pro_[A-Za-z0-9_-]{8,}/g },
 ];
 

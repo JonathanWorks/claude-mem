@@ -64,7 +64,7 @@ import { namesPeriodRateLimit } from '../../shared/period-rate-limit.js';
  */
 
 /**
- * Gateway error taxonomy (cmem.ai inference gateway) → worker error kind.
+ * Gateway error taxonomy (the hosted service inference gateway) → worker error kind.
  * The gateway classifies once at the source and sends
  * `{ error: { code, message, action, url, request_id } }`; the worker carries
  * that envelope verbatim and only maps `code` to a retry class.
@@ -180,7 +180,7 @@ export function classifyOpenRouterError(input: {
   const retryAfterMs = parseRetryAfterMs(retryAfterHeader);
   const envelope = parseUpstreamErrorEnvelope(body);
 
-  // Structured taxonomy envelope from the cmem.ai gateway: carry it verbatim.
+  // Structured taxonomy envelope from the hosted gateway: carry it verbatim.
   if (envelope && typeof envelope.code === 'string' && Object.prototype.hasOwnProperty.call(GATEWAY_CODE_TO_KIND, envelope.code)) {
     const code = envelope.code;
     const kind = GATEWAY_CODE_TO_KIND[code];
@@ -417,7 +417,7 @@ export interface OpenRouterConfig {
   /**
    * The rotation pool: `apiKey` followed by CLAUDE_MEM_OPENROUTER_API_KEYS.
    *
-   * Always exactly `[apiKey]` when the endpoint is the cmem.ai gateway. The
+   * Always exactly `[apiKey]` when the endpoint is the hosted gateway. The
    * gateway key is account-delivered, so there is no second one to rotate to,
    * and the list is by definition the user's PERSONAL keys — sending those to
    * the gateway is the exact leak `resolveOpenRouterConfig` already refuses to
@@ -684,7 +684,7 @@ let lastWithheldCmemKeyUrl: string | null = null;
 
 /**
  * Resolve key/base/model as a source-coherent tuple. In particular, a
- * key-only environment override must never inherit a persisted cmem.ai base
+ * key-only environment override must never inherit a persisted the hosted service base
  * URL and send a personal OpenRouter credential to the cmem gateway, and a key
  * is never returned with a URL it does not belong to (a cmem memory key only
  * with the gateway, any other key only elsewhere). To
@@ -761,7 +761,7 @@ export function resolveOpenRouterConfig(
   if (apiKey && !isKeyAllowedForEndpoint(apiUrl, apiKey)) {
     if (lastWithheldCmemKeyUrl !== apiUrl) {
       lastWithheldCmemKeyUrl = apiUrl;
-      logger.warn('SDK', 'Withholding the OpenRouter key: a cmem.ai memory key only goes to the cmem gateway, and the gateway only takes a cmem.ai memory key. Pair CLAUDE_MEM_OPENROUTER_BASE_URL with a key for that endpoint.');
+      logger.warn('SDK', 'Withholding the OpenRouter key: a hosted memory key only goes to the cmem gateway, and the gateway only takes a hosted memory key. Pair CLAUDE_MEM_OPENROUTER_BASE_URL with a key for that endpoint.');
     }
     return { apiKey: '', apiKeys: [], model, fallbackModels, apiUrl, siteUrl, appName };
   }

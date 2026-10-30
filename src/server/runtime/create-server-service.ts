@@ -424,10 +424,10 @@ export function parseAnthropicCustomHeaders(raw: string | undefined): Record<str
     const colon = line.indexOf(':');
     const name = colon > 0 ? line.slice(0, colon).trim() : '';
     const value = name ? line.slice(colon + 1).trim() : '';
-    // A cmem.ai memory key authenticates only against the cmem gateway; as a
+    // A hosted memory key authenticates only against the cmem gateway; as a
     // header it would leave for this third-party gateway (cmem-gateway.ts).
     if (value.includes('cm_pro_')) {
-      logger.warn('SYSTEM', `server: ignoring line ${index + 1} of CLAUDE_MEM_ANTHROPIC_CUSTOM_HEADERS: it carries a cmem.ai memory key (cm_pro_), which only works on the cmem gateway`);
+      logger.warn('SYSTEM', `server: ignoring line ${index + 1} of CLAUDE_MEM_ANTHROPIC_CUSTOM_HEADERS: it carries a hosted memory key (cm_pro_), which only works on the cmem gateway`);
       return;
     }
     try {
@@ -456,7 +456,7 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     // cm_pro_ account key never goes to api.anthropic.com or a third-party gateway.
     const [apiKey] = keysForEndpoint(resolveAnthropicMessagesUrl(baseUrl), configuredKey ? [configuredKey] : []);
     if (!apiKey) {
-      if (configuredKey) logger.warn('SYSTEM', 'server: withholding the Anthropic key: a cmem.ai memory key (cm_pro_) only goes to the cmem gateway, and the gateway only takes one');
+      if (configuredKey) logger.warn('SYSTEM', 'server: withholding the Anthropic key: a hosted memory key (cm_pro_) only goes to the cmem gateway, and the gateway only takes one');
       return null;
     }
     const opts: ClaudeObservationProviderOptions = {
@@ -476,7 +476,7 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     // The shared cmem key lock: a cm_pro_ account key is never sent to Google.
     const [apiKey] = keysForEndpoint(GEMINI_API_URL, configuredKey ? [configuredKey] : []);
     if (!apiKey) {
-      if (configuredKey) logger.warn('SYSTEM', 'server: refusing a cmem.ai memory key (cm_pro_) as the Gemini key; it only works on the cmem gateway');
+      if (configuredKey) logger.warn('SYSTEM', 'server: refusing a hosted memory key (cm_pro_) as the Gemini key; it only works on the cmem gateway');
       return null;
     }
     const opts: { apiKey: string; model?: string; maxOutputTokens?: number } = { apiKey };
@@ -493,7 +493,7 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     // gateway only with a cm_pro_ key.
     const [apiKey] = keysForEndpoint(resolveOpenRouterChatCompletionsUrl(baseUrl), configuredKey ? [configuredKey] : []);
     if (!apiKey) {
-      if (configuredKey) logger.warn('SYSTEM', 'server: withholding the OpenRouter key: a cmem.ai memory key (cm_pro_) only goes to the cmem gateway, and the gateway only takes one');
+      if (configuredKey) logger.warn('SYSTEM', 'server: withholding the OpenRouter key: a hosted memory key (cm_pro_) only goes to the cmem gateway, and the gateway only takes one');
       return null;
     }
     const opts: { apiKey: string; model?: string; baseUrl?: string; maxOutputTokens?: number; extraBody?: Record<string, unknown> } = { apiKey };

@@ -69,7 +69,8 @@ describe('install help text (#4131)', () => {
 
   // A headless `--runtime server --provider openrouter` install blocked on a
   // browser login the help never mentioned.
-  it('says which providers need a cmem.ai sign-in, matching providerNeedsAccount', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('says which providers need a cmem.ai sign-in, matching providerNeedsAccount', () => {
     expect(providerLine).toBeDefined();
     for (const provider of ['codex', 'gemini', 'openrouter'] as const) {
       expect(providerNeedsAccount(provider)).toBe(true);

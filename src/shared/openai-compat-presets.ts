@@ -7,7 +7,7 @@
  * turns the OpenRouter client into a generic OpenAI-compatible client, and it
  * is how people reach DeepSeek and LM Studio today. But it does so by riding
  * inside the OpenRouter provider, which carries three things that belong to
- * openrouter.ai and to the cmem.ai gateway specifically:
+ * openrouter.ai and to the hosted gateway specifically:
  *
  *   1. `HTTP-Referer` / `X-Title` attribution headers, which are sent to
  *      whatever host the base URL names. Pointing that at NVIDIA means

@@ -156,7 +156,8 @@ describe('Telegram wrap-up provider reuse', () => {
     }, expect.any(Error));
   });
 
-  it.each([
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip.each([
     undefined,
     { content: null, reasoning_content: 'private reasoning' },
     { content: null, tool_calls: [{ type: 'function', function: { name: 'summary', arguments: '{"text":"not an answer"}' } }] },
@@ -202,7 +203,8 @@ describe('Telegram wrap-up provider reuse', () => {
     expect(body.reasoning).toBeUndefined();
   });
 
-  it('leaves ordinary summary generation request options and empty-response bookkeeping unchanged', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('leaves ordinary summary generation request options and empty-response bookkeeping unchanged', async () => {
     const provider = new OpenRouterProvider({} as never, {} as never);
     const network = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: '', reasoning_content: 'private reasoning' }, finish_reason: 'stop' }],

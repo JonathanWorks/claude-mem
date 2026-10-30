@@ -43,7 +43,7 @@ export function describeObserverAuthMethod(provider: string, settings?: Settings
       return 'Gemini API key';
     case 'openrouter':
       return isCmemGatewayUrl(resolvedOpenRouterBaseUrl(resolved, persistedBaseUrl))
-        ? 'cmem.ai gateway'
+        ? 'hosted gateway'
         : 'OpenRouter API key';
     case 'openai-compatible': {
       const preset = resolveOpenAICompatPreset(resolved.CLAUDE_MEM_OPENAI_COMPAT_PRESET);

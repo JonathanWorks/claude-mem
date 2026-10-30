@@ -63,7 +63,8 @@ describe('mergeSettings: unreadable settings.json is quarantined, never reset', 
     }
   });
 
-  it('never stops the sign-in memory key from saving over a corrupt file', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never stops the sign-in memory key from saving over a corrupt file', () => {
     writeFileSync(settingsPath, '{"CLAUDE_MEM_PROVIDER":', 'utf-8');
     const trialSettings = buildTrialReadySettings({
       setupToken: 'setup-token',

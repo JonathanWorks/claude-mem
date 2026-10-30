@@ -22,16 +22,6 @@ import { expandHome } from './expand-home.js';
 // the feature dead on arrival for every pre-existing install.
 const LEGACY_TELEGRAM_TRIGGER_TYPES = 'security_alert';
 
-/** Pinned workers.dev hub from the Cloudflare SyncHub era. */
-const LEGACY_CLOUD_SYNC_HUB_HOST = 'sync-hub.black-pond-afbb.workers.dev';
-/**
- * Production cmem-sync Supabase function, which Connect handed out for a few
- * hours after the Supabase cutover. Supabase's Cloudflare WAF blocks plain
- * memory pushes there; the sync.cmem.ai proxy gzips them through.
- */
-const DIRECT_SUPABASE_CLOUD_SYNC_HUB_HOST = 'ziczmqtpmaxbornfghye.supabase.co';
-/** Canonical Pro hub after the Fly cutover. */
-const CANONICAL_CLOUD_SYNC_HUB_URL = 'https://sync.cmem.ai';
 
 // OpenRouter retires `:free` model ids on its own schedule, and the same seeding
 // (every default written on first load, persisted values winning over
@@ -78,7 +68,7 @@ function hasRetiredOpenRouterDefault(flatSettings: Record<string, any>): boolean
 
 /**
  * Per-attempt deadline for one observer LLM request, in ms (retry.ts), shared
- * by every non-streamed request (Gemini, Codex, the cmem.ai gateway, and an
+ * by every non-streamed request (Gemini, Codex, the hosted gateway, and an
  * OpenAI-compatible endpoint that refuses streaming). Streamed OpenRouter and
  * OpenAI-compatible requests are bounded by liveness instead: a 90s idle
  * timeout and a 300s cap (streamed-chat-completion.ts).
@@ -151,18 +141,8 @@ function markRaisedDefaultDone(settingsPath: string, raised: RaisedDeadlineDefau
 // said once.
 const raisedDefaultFailuresReported = new Set<string>();
 
-function migratedCloudSyncHubUrl(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const hostname = new URL(trimmed).hostname;
-    if (hostname === LEGACY_CLOUD_SYNC_HUB_HOST || hostname === DIRECT_SUPABASE_CLOUD_SYNC_HUB_HOST) {
-      return CANONICAL_CLOUD_SYNC_HUB_URL;
-    }
-  } catch {
-    return null;
-  }
+// PWM fork: no vendor hub hosts to migrate from or to; a configured hub URL is kept as is.
+function migratedCloudSyncHubUrl(_raw: unknown): string | null {
   return null;
 }
 
@@ -305,7 +285,7 @@ export interface SettingsDefaults {
   // Worker-native cloud sync. Active ⇔ TOKEN, USER_ID, and HUB_URL are all
   // non-empty — there is no separate enabled flag. HUB_URL points at the
   // two-lane sync hub (workers/sync-hub); while it is empty, sync is OFF
-  // entirely (the old per-kind cmem.ai lane was deleted in the hub cutover).
+  // entirely (the old per-kind the hosted service lane was deleted in the hub cutover).
   CLAUDE_MEM_CLOUD_SYNC_TOKEN: string;
   CLAUDE_MEM_CLOUD_SYNC_USER_ID: string;
   CLAUDE_MEM_CLOUD_SYNC_HUB_URL: string;
@@ -316,11 +296,6 @@ export interface SettingsDefaults {
   // (#3618). Defaults: 40 ops / 90s (hub projection lease).
   CLAUDE_MEM_CLOUD_SYNC_CONTENT_BATCH_SIZE: string;
   CLAUDE_MEM_CLOUD_SYNC_REQUEST_TIMEOUT_MS: string;
-  // TeamBrain, written by `npx claude-mem teambrain join`. TeamBrain is ON ⇔
-  // TEAMBRAIN_URL is non-empty; its calls authenticate with the cloud sync
-  // token and user id above, so it needs no credential of its own.
-  CLAUDE_MEM_TEAMBRAIN_URL: string;
-  CLAUDE_MEM_TEAMBRAIN_TEAM_ID: string;
   CLAUDE_MEM_LLM_TIMEOUT_MS: string;
   CLAUDE_MEM_FIELD_OPTIMIZE_TIMEOUT_MS: string;
   CLAUDE_MEM_LLM_STREAM_IDLE_TIMEOUT_MS: string;
@@ -334,10 +309,6 @@ export interface SettingsDefaults {
   // claude-mem sign-in funnel state, written by the installer's browser-login
   // step (install.ts promptBrowserLogin/completeTrialPairing). Declared here so
   // loadFromFile round-trips them instead of dropping unknown keys.
-  CLAUDE_MEM_PRO_TRIAL_EMAIL: string;
-  CLAUDE_MEM_PRO_TRIAL_AT: string;
-  CLAUDE_MEM_PRO_TRIAL_STATE: string;
-  CLAUDE_MEM_PRO_TRIAL_ENDS_AT: string;
   CLAUDE_MEM_PRO_PLAN: string;
   CLAUDE_MEM_PRO_FALLBACK_AT: string;
   // The gateway's own words for the rejection that set CLAUDE_MEM_PRO_FALLBACK_AT,
@@ -604,17 +575,15 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_EMBEDDING_MODEL: 'all-MiniLM-L6-v2',
     CLAUDE_MEM_CHROMA_UVX_PATH: '',            // Empty = search uv's install folders, then PATH (#4195)
     CLAUDE_MEM_SEARCH_RECENCY_DAYS: '90',      // Date-less semantic search only ranks matches from the last N days (#4770). 0 = no window (every match eligible); an explicit dateStart/dateEnd always wins. Restart the worker after changing it
-    // Worker-native cloud sync: credentials come from cmem.ai → Connect.
+    // Worker-native cloud sync: credentials come from the hosted service → Connect.
     CLAUDE_MEM_CLOUD_SYNC_TOKEN: '',
     CLAUDE_MEM_CLOUD_SYNC_USER_ID: '',
-    CLAUDE_MEM_CLOUD_SYNC_HUB_URL: '',  // sync-hub base URL (e.g. https://sync.cmem.ai). Empty = sync OFF
+    CLAUDE_MEM_CLOUD_SYNC_HUB_URL: '',  // sync-hub base URL (the self-hosted fleet hub). Empty = sync OFF
     CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: '',      // Minted at first CloudSync start, then persisted back here
-    CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: hostname(),  // Human-readable label for the cmem.ai Devices panel
+    CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: hostname(),  // Human-readable label for the the hosted service Devices panel
     CLAUDE_MEM_CLOUD_SYNC_WS: 'true',  // Live updates (Supabase Realtime `advance` broadcasts). 'false' disables live updates — sync stays fully correct, just poll-latency (prime directive #2)
     CLAUDE_MEM_CLOUD_SYNC_CONTENT_BATCH_SIZE: '40',  // Drain page size; 200-op content pushes timed out under hub projection_busy
     CLAUDE_MEM_CLOUD_SYNC_REQUEST_TIMEOUT_MS: '90000',  // Content-push AbortSignal; matches hub PROJECTION_LEASE_MS (90s)
-    CLAUDE_MEM_TEAMBRAIN_URL: '',      // TeamBrain base URL (e.g. https://cmem.ai). Empty = TeamBrain OFF
-    CLAUDE_MEM_TEAMBRAIN_TEAM_ID: '',  // The team this install joined (teambrain share/leave default to it)
     CLAUDE_MEM_LLM_TIMEOUT_MS: String(DEFAULT_LLM_TIMEOUT_MS),  // Per-attempt deadline for non-streamed observer requests (retry.ts); streamed OpenRouter/OpenAI-compatible requests use a 90s idle timeout + 300s cap (streamed-chat-completion.ts)
     CLAUDE_MEM_FIELD_OPTIMIZE_TIMEOUT_MS: String(DEFAULT_LLM_TIMEOUT_MS),  // Oversized-field condensation deadline (field-optimizer.ts); a request to the same backend, so the same deadline
     CLAUDE_MEM_LLM_STREAM_IDLE_TIMEOUT_MS: '90000',  // Streamed request idle window (streamed-chat-completion.ts): silence that ends a stream. Self-hosted backends queue behind a load balancer, and the queue wait reads as idle (#4737) — raise it there. Literal because shared cannot import from the worker; a drift test pins it to the shipped constant
@@ -627,15 +596,11 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_TV_TOKEN: '',
     // claude-mem sign-in funnel state: all empty until the installer's
     // browser-login step writes them.
-    CLAUDE_MEM_PRO_TRIAL_EMAIL: '',     // Email the sign-in link was sent to (don't-re-nag marker)
-    CLAUDE_MEM_PRO_TRIAL_AT: '',        // ISO timestamp of the last sign-in link send
-    CLAUDE_MEM_PRO_TRIAL_STATE: '',     // 'link_sent' (started, credentials never picked up) | 'active' (done)
-    CLAUDE_MEM_PRO_TRIAL_ENDS_AT: '',   // ISO date the free trial ends (from poll trial.ends_at); '' when absent
     CLAUDE_MEM_PRO_PLAN: '',            // 'trial' | 'pro' | 'none' — plan reported by the poll on ready
     CLAUDE_MEM_PRO_FALLBACK_AT: '',     // ISO timestamp when the cmem gateway terminally rejected the delivered key and memory fell back to the Anthropic plan; '' = no fallback. Event-driven only (never set from trial dates); cleared by a successful gateway response or fresh installer key material.
     CLAUDE_MEM_PRO_FALLBACK_MESSAGE: '', // The gateway's message for that rejection ('' = plan-neutral notice copy)
     CLAUDE_MEM_PRO_FALLBACK_ACTION: '',  // The gateway's "what to do" for that rejection
-    CLAUDE_MEM_PRO_FALLBACK_URL: '',     // The gateway's link for that rejection ('' = the cmem.ai/pro renewal link)
+    CLAUDE_MEM_PRO_FALLBACK_URL: '',     // The gateway's link for that rejection ('' = the the hosted service/pro renewal link)
     CLAUDE_MEM_PRO_MEMORY_KEY: '',       // One-shot browser-pairing memory key, staged until provider selection (settings.json is chmod 0600 by the installer)
     CLAUDE_MEM_PRO_MEMORY_BASE_URL: '',  // Backend-supplied endpoint paired with CLAUDE_MEM_PRO_MEMORY_KEY
     CLAUDE_MEM_PRO_MEMORY_MODEL: '',     // Backend-supplied model paired with CLAUDE_MEM_PRO_MEMORY_KEY

@@ -102,7 +102,8 @@ describe('buildOpenRouterRequestBody with an extra body', () => {
     expect(body.top_p).toBe(0.5);
   });
 
-  it('sends nothing extra to the cmem gateway: the body is byte-identical', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends nothing extra to the cmem gateway: the body is byte-identical', () => {
     const plain = buildOpenRouterRequestBody({ ...base, apiUrl: GATEWAY_URL });
     const withExtra = buildOpenRouterRequestBody({
       ...base,
@@ -210,7 +211,8 @@ describe('resolveOpenRouterConfig reads CLAUDE_MEM_OPENROUTER_EXTRA_BODY from se
     expect(resolveOpenRouterConfig(settingsPath).extraBody).toEqual({ thinking: { type: 'disabled' } });
   });
 
-  it('attaches nothing for the cmem gateway tuple', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('attaches nothing for the cmem gateway tuple', () => {
     writeSettings({
       CLAUDE_MEM_OPENROUTER_API_KEY: 'cm_pro_0123456789abcdef01234567',
       CLAUDE_MEM_OPENROUTER_BASE_URL: 'https://cmem.ai/api/inference/v1',
@@ -257,7 +259,8 @@ describe('a request to a dev cmem gateway', () => {
     else process.env.CMEM_PRO_ORIGIN = savedOrigin;
   });
 
-  it('is byte-identical with and without an extra body', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('is byte-identical with and without an extra body', async () => {
     const bodies: string[] = [];
     const server = createServer((req: IncomingMessage, res) => {
       let raw = '';
@@ -332,7 +335,8 @@ describe('server runtime OpenRouter provider', () => {
     expect(bodies[0]?.reasoning).toEqual({ enabled: false });
   });
 
-  it('never sends the extra body to the cmem gateway', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('never sends the extra body to the cmem gateway', async () => {
     const { bodies, fetchImpl } = capture();
     const provider = new OpenRouterObservationProvider({
       apiKey: 'cm_pro_0123456789abcdef01234567',

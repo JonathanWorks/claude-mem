@@ -24,7 +24,7 @@ npm run coverage   # checks every UI requirement is on screen, writes COVERAGE.m
 | My Goals | `src/pages/my-goals.tsx` | Inline Citation |
 | My Rules: decision queue, scopes, replaced history | `src/pages/my-rules.tsx`, sample rules in `src/data-rules.ts` | Confirmation, Inline Citation, Artifact |
 
-The top bar switches between **At home** (localhost) and **On the go** (cmem.ai), which changes the live source, Refresh behavior and where edits are saved from.
+The top bar switches between **At home** (localhost) and **On the go** (the hosted service), which changes the live source, Refresh behavior and where edits are saved from.
 
 ## Shared request state
 

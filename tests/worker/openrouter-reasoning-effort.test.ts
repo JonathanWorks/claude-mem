@@ -29,7 +29,8 @@ const base = {
 };
 
 describe('buildOpenRouterRequestBody reasoning effort', () => {
-  it('disables reasoning on openrouter.ai and the cmem gateway when unset, and leaves a custom gateway alone', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('disables reasoning on openrouter.ai and the cmem gateway when unset, and leaves a custom gateway alone', () => {
     expect(buildOpenRouterRequestBody({ ...base, apiUrl: OPENROUTER_URL }).reasoning).toEqual({ enabled: false });
     expect(buildOpenRouterRequestBody({ ...base, apiUrl: 'https://cmem.ai/api/inference/v1/chat/completions' }).reasoning)
       .toEqual({ enabled: false });
@@ -49,7 +50,8 @@ describe('buildOpenRouterRequestBody reasoning effort', () => {
     }
   });
 
-  it('sends a typed effort to openrouter.ai only; cmem stays reasoning-off and a custom gateway stays unset', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends a typed effort to openrouter.ai only; cmem stays reasoning-off and a custom gateway stays unset', () => {
     expect(buildOpenRouterRequestBody({ ...base, apiUrl: 'https://api.deepseek.com/chat/completions', reasoningEffort: 'low' }).reasoning)
       .toBeUndefined();
     expect(buildOpenRouterRequestBody({ ...base, apiUrl: 'https://cmem.ai/api/inference/v1/chat/completions', reasoningEffort: 'low' }).reasoning)
@@ -82,7 +84,8 @@ describe('buildOpenRouterRequestBody reasoning effort', () => {
     expect(body.response_format).toEqual({ type: 'text' });
   });
 
-  it('asks a field condensation for an answer instead of reasoning, over the effort setting', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('asks a field condensation for an answer instead of reasoning, over the effort setting', () => {
     const label = { kind: 'field_compression' as const, sessionId: 'session-1' };
     for (const apiUrl of [OPENROUTER_URL, 'https://cmem.ai/api/inference/v1/chat/completions']) {
       const body = buildOpenRouterRequestBody({ ...base, apiUrl, label, reasoningEffort: 'high' });
@@ -213,7 +216,8 @@ describe('resolveOpenRouterConfig reads the reasoning effort', () => {
     }
   });
 
-  it('attaches nothing for the cmem gateway tuple', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('attaches nothing for the cmem gateway tuple', () => {
     writeSettings({
       CLAUDE_MEM_OPENROUTER_API_KEY: 'cm_pro_0123456789abcdef01234567',
       CLAUDE_MEM_OPENROUTER_BASE_URL: 'https://cmem.ai/api/inference/v1',

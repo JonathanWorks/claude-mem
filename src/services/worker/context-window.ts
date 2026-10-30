@@ -197,7 +197,7 @@ function parseContextWindowOverride(raw: unknown): number | null {
  * MIN_CONTEXT_WINDOW_TOKENS) → Claude map → Gemini map → OpenRouter catalogue
  * → FALLBACK_CONTEXT_WINDOW_TOKENS.
  *
- * The catalogue is consulted only for openrouter.ai and the cmem.ai gateway,
+ * The catalogue is consulted only for openrouter.ai and the hosted gateway,
  * which serves OpenRouter model ids. Any other OpenAI-compatible endpoint
  * serves models the catalogue knows nothing about, so a lookup there would be
  * a name collision at best; set the override for those.

@@ -82,7 +82,6 @@ export const SAMPLE_PAST_PERIODS: PastPeriod[] = [
   { id: '2026-07-18', label: 'Jul 18 – Aug 17', promptCount: 703,
     headline: 'You took the paid plan from never launched to its first real customers.',
     areas: [
-      { title: 'Paid plan core loop: sign up, get a key, it works', label: 'Paid plan', timesAsked: 5, quote: { at: '08-16 12:00', quote: 'find the PR that has the free trial links and make sure they are all in there' } },
       { title: 'Reliability and clear failure messages', label: 'Observer', timesAsked: 4, quote: { at: '08-16 10:10', quote: 'all errors should be well explained, with ways to get it resolved' } },
       { title: 'Key and usage limits done right', label: 'Paid plan', timesAsked: 6, quote: { at: '08-16 11:18', quote: 'leave my key uncapped for now, we can add a limit later' } },
     ] },

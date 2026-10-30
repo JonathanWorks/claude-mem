@@ -8,7 +8,7 @@ import { AUTH_CACHE_TTL_DEFAULT_SECONDS, AUTH_CACHE_TTL_MAX_SECONDS, type SyncAp
 import { authHeaders, trackedApp, uniqueUser } from "./helpers";
 
 const env = {
-	TOKEN_VERIFY_URL: "https://cmem.ai/api/pro/sync/verify",
+	TOKEN_VERIFY_URL: "http://verify.test/v",
 	AUTH_CACHE_TTL_SECONDS: "300",
 } as SyncApiEnv;
 
@@ -45,7 +45,7 @@ describe("authenticateRequest", () => {
 			const body = await result.response.json() as Record<string, unknown>;
 			expect(body.code).toBe("subscription_inactive");
 			expect(body.status).toBe("past_due");
-			expect(String(body.message)).toContain("cmem.ai/pro");
+			expect(String(body.message)).toContain("token table");
 		}
 	});
 
@@ -72,7 +72,7 @@ describe("authenticateRequest", () => {
 			const body = await result.response.json() as Record<string, unknown>;
 			expect(body.code).toBe("invalid_token");
 			expect(body.error).toBe("invalid token");
-			expect(String(body.message)).toContain("Reconnect");
+			expect(String(body.message)).toContain("Re-issue");
 		}
 	});
 

@@ -51,7 +51,8 @@ describe('skill docs placement (#1651)', () => {
     expect(content).not.toContain('Bundled Languages');
   });
 
-  it('cloud-sync/SKILL.md requires the authenticated Hub probe for success', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('cloud-sync/SKILL.md requires the authenticated Hub probe for success', () => {
     const path = join(SKILLS_DIR, 'cloud-sync/SKILL.md');
     expect(existsSync(path)).toBe(true);
     const content = readFileSync(path, 'utf-8');

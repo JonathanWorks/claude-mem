@@ -5,7 +5,7 @@
  *
  * Privacy: per-UTC-day observation counts and discovery-token sums ONLY. No
  * prompts, observation text, paths, project names, or hostnames ever enter this
- * structure — the shape below is the whole payload, and cmem.ai drops anything
+ * structure — the shape below is the whole payload, and the hosted service drops anything
  * that does not match it exactly.
  *
  * DB access: the npx CLI runs under Node (engines >=20.12), where `bun:sqlite`

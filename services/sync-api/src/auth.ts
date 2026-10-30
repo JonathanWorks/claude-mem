@@ -88,7 +88,9 @@ export function defaultAuthDependencies(env: SyncApiEnv): AuthDependencies {
 		// PWM fork: a self-hosted hub answers its own token check (local-verify.ts).
 		verifyToken: env.LOCAL_TOKEN_SHA256
 			? (request) => localVerify(request, tokenTableFor(env.LOCAL_TOKEN_SHA256))
-			: (request) => fetch(request),
+			: env.TOKEN_VERIFY_URL
+				? (request) => fetch(request)
+				: async () => Response.json({ error: "no token verifier configured" }, { status: 503 }),
 		logCacheFailure(operation, error) {
 			console.warn("sync-hub auth cache unavailable:", {
 				operation,
@@ -142,9 +144,9 @@ export function cacheTtlSeconds(env: SyncApiEnv): number {
 }
 
 const INVALID_TOKEN_MESSAGE =
-	"This sync token is no longer valid. Reconnect at https://cmem.ai (Connect) to resume cloud sync.";
+	"This sync token is no longer valid. Re-issue this device's token on the sync hub to resume sync.";
 const SUBSCRIPTION_INACTIVE_MESSAGE =
-	"Your CMEM Pro subscription is not active. Renew at https://cmem.ai/pro to resume cloud sync.";
+	"The sync hub refused this account. Check the hub's token table to resume sync.";
 
 /**
  * Map the Pro verify rejection to a stable client contract. The plugin stops
@@ -219,7 +221,8 @@ export async function authenticateRequest(
 	let verifyRes: Response;
 	try {
 		verifyRes = await dependencies.verifyToken(
-			new Request(env.TOKEN_VERIFY_URL, {
+			// PWM fork: the local verifier ignores the URL, so a self-hosted hub needs none.
+			new Request(env.TOKEN_VERIFY_URL || "http://token-verify.invalid/", {
 				method: "GET",
 				headers: {
 					Authorization: `Bearer ${token}`,

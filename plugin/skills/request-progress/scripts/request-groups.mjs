@@ -767,21 +767,10 @@ function markRaisedDefaultDone(settingsPath, raised) {
   } catch {
   }
 }
-function migratedCloudSyncHubUrl(raw) {
-  if (typeof raw !== "string") return null;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  try {
-    const hostname2 = new URL(trimmed).hostname;
-    if (hostname2 === LEGACY_CLOUD_SYNC_HUB_HOST || hostname2 === DIRECT_SUPABASE_CLOUD_SYNC_HUB_HOST) {
-      return CANONICAL_CLOUD_SYNC_HUB_URL;
-    }
-  } catch {
-    return null;
-  }
+function migratedCloudSyncHubUrl(_raw) {
   return null;
 }
-var LEGACY_TELEGRAM_TRIGGER_TYPES, LEGACY_CLOUD_SYNC_HUB_HOST, DIRECT_SUPABASE_CLOUD_SYNC_HUB_HOST, CANONICAL_CLOUD_SYNC_HUB_URL, RETIRED_OPENROUTER_DEFAULT_MODELS, DEFAULT_LLM_TIMEOUT_MS, RAISED_DEADLINE_DEFAULTS, raisedDefaultFailuresReported, SettingsDefaultsManager;
+var LEGACY_TELEGRAM_TRIGGER_TYPES, RETIRED_OPENROUTER_DEFAULT_MODELS, DEFAULT_LLM_TIMEOUT_MS, RAISED_DEADLINE_DEFAULTS, raisedDefaultFailuresReported, SettingsDefaultsManager;
 var init_SettingsDefaultsManager = __esm({
   "src/shared/SettingsDefaultsManager.ts"() {
     "use strict";
@@ -791,9 +780,6 @@ var init_SettingsDefaultsManager = __esm({
     init_settings_document();
     init_expand_home();
     LEGACY_TELEGRAM_TRIGGER_TYPES = "security_alert";
-    LEGACY_CLOUD_SYNC_HUB_HOST = "sync-hub.black-pond-afbb.workers.dev";
-    DIRECT_SUPABASE_CLOUD_SYNC_HUB_HOST = "ziczmqtpmaxbornfghye.supabase.co";
-    CANONICAL_CLOUD_SYNC_HUB_URL = "https://sync.cmem.ai";
     RETIRED_OPENROUTER_DEFAULT_MODELS = /* @__PURE__ */ new Set([
       "xiaomi/mimo-v2-flash:free"
     ]);
@@ -1059,25 +1045,21 @@ var init_SettingsDefaultsManager = __esm({
         // Empty = search uv's install folders, then PATH (#4195)
         CLAUDE_MEM_SEARCH_RECENCY_DAYS: "90",
         // Date-less semantic search only ranks matches from the last N days (#4770). 0 = no window (every match eligible); an explicit dateStart/dateEnd always wins. Restart the worker after changing it
-        // Worker-native cloud sync: credentials come from cmem.ai → Connect.
+        // Worker-native cloud sync: credentials come from the hosted service → Connect.
         CLAUDE_MEM_CLOUD_SYNC_TOKEN: "",
         CLAUDE_MEM_CLOUD_SYNC_USER_ID: "",
         CLAUDE_MEM_CLOUD_SYNC_HUB_URL: "",
-        // sync-hub base URL (e.g. https://sync.cmem.ai). Empty = sync OFF
+        // sync-hub base URL (the self-hosted fleet hub). Empty = sync OFF
         CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: "",
         // Minted at first CloudSync start, then persisted back here
         CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: hostname(),
-        // Human-readable label for the cmem.ai Devices panel
+        // Human-readable label for the the hosted service Devices panel
         CLAUDE_MEM_CLOUD_SYNC_WS: "true",
         // Live updates (Supabase Realtime `advance` broadcasts). 'false' disables live updates — sync stays fully correct, just poll-latency (prime directive #2)
         CLAUDE_MEM_CLOUD_SYNC_CONTENT_BATCH_SIZE: "40",
         // Drain page size; 200-op content pushes timed out under hub projection_busy
         CLAUDE_MEM_CLOUD_SYNC_REQUEST_TIMEOUT_MS: "90000",
         // Content-push AbortSignal; matches hub PROJECTION_LEASE_MS (90s)
-        CLAUDE_MEM_TEAMBRAIN_URL: "",
-        // TeamBrain base URL (e.g. https://cmem.ai). Empty = TeamBrain OFF
-        CLAUDE_MEM_TEAMBRAIN_TEAM_ID: "",
-        // The team this install joined (teambrain share/leave default to it)
         CLAUDE_MEM_LLM_TIMEOUT_MS: String(DEFAULT_LLM_TIMEOUT_MS),
         // Per-attempt deadline for non-streamed observer requests (retry.ts); streamed OpenRouter/OpenAI-compatible requests use a 90s idle timeout + 300s cap (streamed-chat-completion.ts)
         CLAUDE_MEM_FIELD_OPTIMIZE_TIMEOUT_MS: String(DEFAULT_LLM_TIMEOUT_MS),
@@ -1094,14 +1076,6 @@ var init_SettingsDefaultsManager = __esm({
         CLAUDE_MEM_TV_TOKEN: "",
         // claude-mem sign-in funnel state: all empty until the installer's
         // browser-login step writes them.
-        CLAUDE_MEM_PRO_TRIAL_EMAIL: "",
-        // Email the sign-in link was sent to (don't-re-nag marker)
-        CLAUDE_MEM_PRO_TRIAL_AT: "",
-        // ISO timestamp of the last sign-in link send
-        CLAUDE_MEM_PRO_TRIAL_STATE: "",
-        // 'link_sent' (started, credentials never picked up) | 'active' (done)
-        CLAUDE_MEM_PRO_TRIAL_ENDS_AT: "",
-        // ISO date the free trial ends (from poll trial.ends_at); '' when absent
         CLAUDE_MEM_PRO_PLAN: "",
         // 'trial' | 'pro' | 'none' — plan reported by the poll on ready
         CLAUDE_MEM_PRO_FALLBACK_AT: "",
@@ -1111,7 +1085,7 @@ var init_SettingsDefaultsManager = __esm({
         CLAUDE_MEM_PRO_FALLBACK_ACTION: "",
         // The gateway's "what to do" for that rejection
         CLAUDE_MEM_PRO_FALLBACK_URL: "",
-        // The gateway's link for that rejection ('' = the cmem.ai/pro renewal link)
+        // The gateway's link for that rejection ('' = the the hosted service/pro renewal link)
         CLAUDE_MEM_PRO_MEMORY_KEY: "",
         // One-shot browser-pairing memory key, staged until provider selection (settings.json is chmod 0600 by the installer)
         CLAUDE_MEM_PRO_MEMORY_BASE_URL: "",
@@ -2506,18 +2480,6 @@ var init_EnvManager = __esm({
   }
 });
 
-// src/shared/pro-promo.ts
-var PRO_TRIAL_MAX_DAYS, PRO_TRIAL_LABEL, PLAN_USAGE_GAIN_PERCENT, PRO_TRIAL_PITCH;
-var init_pro_promo = __esm({
-  "src/shared/pro-promo.ts"() {
-    "use strict";
-    PRO_TRIAL_MAX_DAYS = 30;
-    PRO_TRIAL_LABEL = `${PRO_TRIAL_MAX_DAYS} Day Free Trial`;
-    PLAN_USAGE_GAIN_PERCENT = 100;
-    PRO_TRIAL_PITCH = `${PRO_TRIAL_LABEL} \u2014 memory runs off-plan. Get up to ${PLAN_USAGE_GAIN_PERCENT}% more usage from your plan`;
-  }
-});
-
 // src/shared/relayed-text.ts
 var init_relayed_text = __esm({
   "src/shared/relayed-text.ts"() {
@@ -2527,7 +2489,7 @@ var init_relayed_text = __esm({
 
 // src/shared/cmem-gateway.ts
 function cmemProOrigin() {
-  return (process.env.CMEM_PRO_ORIGIN?.trim() || "https://cmem.ai").replace(/\/+$/, "");
+  return "";
 }
 function isCmemGatewayUrl(url) {
   const trimmed = (url ?? "").trim();
@@ -2557,7 +2519,6 @@ var init_cmem_gateway = __esm({
     init_SettingsDefaultsManager();
     init_settings_document();
     init_hook_io();
-    init_pro_promo();
     init_relayed_text();
   }
 });

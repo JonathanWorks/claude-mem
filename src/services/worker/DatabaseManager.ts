@@ -64,7 +64,7 @@ export class DatabaseManager {
       purgeUndrainableSyncOutbox(this.db);
     }
     // Work-state reads fold native rows as this device's writes (the order
-    // other devices and cmem.ai use), under the id CloudSync resolved.
+    // other devices and the hosted service use), under the id CloudSync resolved.
     this.sessionStore.setLocalSyncDeviceId(this.cloudSync?.status().deviceId ?? settings.CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID);
 
     purgeLinkedToolUses(this.db, resolveToolUsesRetentionDays(settings.CLAUDE_MEM_TOOL_USES_RETENTION_DAYS));

@@ -1,7 +1,7 @@
 /**
  * Self-hosted token verification (PWM fork). When LOCAL_TOKEN_SHA256 is set, the hub answers
  * its own token check instead of calling TOKEN_VERIFY_URL, so a hub run on your own machine
- * never sends a token to cmem.ai.
+ * never sends a token to any outside service.
  *
  * LOCAL_TOKEN_SHA256 is JSON: `{"<sha256 hex of a device token>": "<user id>", ...}`. Only the
  * hashes sit in the environment. The response matches the verify contract `authenticate`

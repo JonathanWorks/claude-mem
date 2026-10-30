@@ -5,7 +5,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 
 /**
- * Cloud sync status endpoint (cmem.ai Pro).
+ * Cloud sync status endpoint (the hosted service Pro).
  *
  * Registered unconditionally: an unconfigured install (no token/user id →
  * DatabaseManager.getCloudSync() returns null) still answers 200 with

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * cmem.ai inference-gateway detection and the trial-expiry fallback marker.
+ * the hosted service inference-gateway detection and the trial-expiry fallback marker.
  *
  * When the installer's browser login delivers a memory key, the worker talks
- * to the cmem.ai gateway through the generic OpenRouter provider
+ * to the hosted gateway through the generic OpenRouter provider
  * (CLAUDE_MEM_OPENROUTER_BASE_URL points at `${CMEM_PRO_ORIGIN}/api/inference/v1`).
  * When the gateway stops serving the account it answers with a terminal code —
  * `subscription_inactive` for a lapsed, cancelled, or unpaid trial or plan,
@@ -28,22 +28,23 @@ import { paths, USER_SETTINGS_PATH } from './paths.js';
 import { SettingsDefaultsManager } from './SettingsDefaultsManager.js';
 import { updateSettingsDocument } from './settings-document.js';
 import { emitDiagnostic } from './hook-io.js';
-import { proTrialUrl } from './pro-promo.js';
 import { relayedLine, relayedLink } from './relayed-text.js';
 
 /**
- * Origin for the cmem.ai funnel and gateway. Overridable so the whole flow can
+ * Origin for the the hosted service funnel and gateway. Overridable so the whole flow can
  * be walked against a dev server (CMEM_PRO_ORIGIN=http://localhost:3005).
  * Read per-call, not at module load, so tests and the installer's env override
  * both work regardless of import order.
  */
 export function cmemProOrigin(): string {
-  return (process.env.CMEM_PRO_ORIGIN?.trim() || 'https://cmem.ai').replace(/\/+$/, '');
+  // PWM fork: no vendor origin and no override, so isCmemGatewayUrl() is always false and no
+  // gateway, sign-in or trial call can be made.
+  return '';
 }
 
 /**
  * Whether a configured base URL (or a resolved request URL) points at the
- * cmem.ai inference gateway. Blank means the default openrouter.ai endpoint —
+ * the hosted service inference gateway. Blank means the default openrouter.ai endpoint —
  * a user-owned key — and is never the gateway: the trial-expiry fallback must
  * only ever fire for cmem-delivered keys.
  */
@@ -64,7 +65,7 @@ export function isCmemGatewayUrl(url: string | undefined | null): boolean {
     // CMEM_PRO_ORIGIN may include a development-server base path. Match that
     // path on a segment boundary so `/mock` accepts `/mock/api/...` but not
     // `/mockery`. URL.origin equality above rejects deceptive host/port
-    // prefixes such as `cmem.ai.evil` and `localhost:30050`.
+    // prefixes such as `the hosted service.evil` and `localhost:30050`.
     const gatewayPath = gateway.pathname.replace(/\/+$/, '');
     return gatewayPath === ''
       || candidate.pathname === gatewayPath
@@ -75,7 +76,7 @@ export function isCmemGatewayUrl(url: string | undefined | null): boolean {
 }
 
 /**
- * How the cmem.ai gateway figures in a setup, from settings alone (the same
+ * How the hosted gateway figures in a setup, from settings alone (the same
  * predicates dispatch applies): 'primary' when memory runs on it (the
  * OpenRouter provider selected with the gateway as its base URL), 'quota-fallback'
  * when it is the opt-in quota fallback (CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER
@@ -94,7 +95,7 @@ export function cmemGatewayRole(settings: {
 }
 
 /**
- * Whether the cmem.ai gateway can serve observer requests on this setup, as
+ * Whether the hosted gateway can serve observer requests on this setup, as
  * memory's provider or as the opt-in quota fallback — whether or not it is
  * serving right now. Unattended retries are bounded whenever it can, because
  * each one may spend plan tokens.
@@ -104,7 +105,7 @@ export function canCmemGatewayServe(settingsPath: string = USER_SETTINGS_PATH): 
 }
 
 /**
- * Whether an API key is the account-owned cmem.ai memory key. Every key the
+ * Whether an API key is the account-owned hosted memory key. Every key the
  * gateway has issued is `cm_pro_` + 24 or 32 hex chars (the server-side
  * validator the installer once mirrored, 9d6742f1a); the prefix alone is the
  * test, so a future key length is still recognized. Such a key authenticates
@@ -161,7 +162,7 @@ const PRO_FALLBACK_KEYS = [
 /**
  * The one-time session-start notice for an active fallback. The gateway's
  * words enter model context here, so each is relayed as one plain, bounded
- * line (relayed-text.ts), and its link only when it is a cmem.ai page, where
+ * line (relayed-text.ts), and its link only when it is a the hosted service page, where
  * the plan is managed. Anything else gets the renewal link.
  *
  * Plan-neutral: paid accounts at their monthly cap are turned away too, so it
@@ -169,7 +170,7 @@ const PRO_FALLBACK_KEYS = [
  * is true for every account.
  */
 export function proFallbackNotice(notice: ProFallbackNotice, role: CmemGatewayRole = 'primary'): string {
-  const message = relayedLine(notice.message) || 'cmem.ai memory is paused for this account.';
+  const message = relayedLine(notice.message) || 'The hosted memory gateway is paused for this account.';
   const action = relayedLine(notice.action);
   // As the opt-in quota fallback the gateway never had memory: nothing moved
   // to the Anthropic plan. Dispatch skips it inside the marker's window and
@@ -180,13 +181,8 @@ export function proFallbackNotice(notice: ProFallbackNotice, role: CmemGatewayRo
   return [
     message,
     ...(action ? [action] : []),
-    `${consequence} Manage your plan: ${planLink(notice.url)}`,
+    consequence,
   ].join('\n');
-}
-
-function planLink(url: string | undefined): string {
-  const link = relayedLink(url);
-  return link !== null && new URL(link).hostname === 'cmem.ai' ? link : proTrialUrl('fallback');
 }
 
 /**
@@ -293,19 +289,3 @@ export function markProFallbackNoticeShown(dataDir: string = paths.dataDir()): v
 
 const DAY_MS = 86_400_000;
 
-/**
- * Whole days until the stored trial end date — 0 when it ends later today,
- * negative once past, null when absent/unparseable. Computed locally from
- * CLAUDE_MEM_PRO_TRIAL_ENDS_AT; no network. Display-only nicety: nothing is
- * ever enabled or disabled from this value (the fallback is event-driven).
- */
-export function trialDaysRemaining(
-  endsAtIso: string | undefined | null,
-  nowMs: number = Date.now(),
-): number | null {
-  const trimmed = (endsAtIso ?? '').trim();
-  if (!trimmed) return null;
-  const endMs = Date.parse(trimmed);
-  if (Number.isNaN(endMs)) return null;
-  return Math.floor((endMs - nowMs) / DAY_MS);
-}

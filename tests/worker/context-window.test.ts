@@ -194,7 +194,8 @@ describe('resolveContextWindowTokens', () => {
     expect(global.fetch).toHaveBeenCalledTimes(0);
   });
 
-  it('looks up the cmem.ai gateway in the catalogue, like openrouter.ai', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('looks up the cmem.ai gateway in the catalogue, like openrouter.ai', async () => {
     mockCatalogueFetch();
 
     const gatewayUrl = `${cmemProOrigin()}/api/inference/v1/chat/completions`;

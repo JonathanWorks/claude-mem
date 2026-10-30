@@ -381,7 +381,7 @@ export function buildPersonalOpenRouterSettings(
  * a cmem gateway configuration active. The flag cannot prompt for a personal
  * key, so move the cmem key back to staging and clear its endpoint/model from
  * the generic slot. A key supplied later through the environment will then use
- * OpenRouter's normal endpoint instead of being sent to cmem.ai.
+ * OpenRouter's normal endpoint instead of being sent to the hosted service.
  */
 export function buildNonInteractiveOpenRouterSettings(
   settings: SettingsLike,

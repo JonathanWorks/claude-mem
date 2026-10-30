@@ -26,8 +26,7 @@ import { resolveOpenAICompatConfig } from '../../OpenAICompatProvider.js';
 import { resolveOpenAICompatReasoning } from '../../reasoning-budget.js';
 import { AutoRefreshWorker } from '../../../work-view/auto-refresh-worker.mjs';
 import { buildRefreshTask } from '../../../work-view/refresh-task.js';
-import { HostedIntent } from '../../../work-view/hosted-intent.js';
-import { cmemProOrigin } from '../../../../shared/cmem-gateway.js';
+import type { HostedIntent } from '../../../work-view/hosted-intent.js';
 import { isOpenRouterApiUrl } from '../../../../shared/openrouter-base-url.js';
 import { runAgentTask } from '../../../agent-runner/run.js';
 import { ledgerSignature, readLedger } from '../../../work-view/request-groups.mjs';
@@ -266,7 +265,7 @@ const setupChoiceBody = z.object({
   branch: z.enum(['home', 'go']),
   memoryBilling: z.enum(['hosted', 'existing']),
 }).strict().refine(choice => choice.branch === 'home' || choice.memoryBilling === 'hosted', {
-  message: 'On The Go uses CMEM Pro (memoryBilling "hosted").',
+  message: 'On The Go is not available in this build.',
 });
 const setupInstallerBody = z.object({
   stage: z.enum(['waiting-for-choice', 'home-ready', 'go-kept-existing-pro', 'go-awaiting-checkout', 'failed']),
@@ -435,21 +434,8 @@ export class WorkViewRoutes extends BaseRouteHandler {
     this.setupStatePath = options.setupStatePath ?? setupStatePath();
     this.settingsPath = options.settingsPath ?? USER_SETTINGS_PATH;
     this.historyImport = options.historyImport ?? null;
-    this.hostedIntent = options.hostedIntent === undefined
-      ? (this.setupScan && ledgerDir && this.appendWorkStateEntry ? new HostedIntent({
-        origin: () => cmemProOrigin(),
-        intentConfigPath: join(dirname(this.settingsPath), 'intent-install.json'),
-        credentials: () => {
-          const settings = SettingsDefaultsManager.loadFromFile(this.settingsPath, true, { readOnly: true });
-          return { token: settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN?.trim() ?? '', userId: settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID?.trim() ?? '' };
-        },
-        ledgerDir,
-        openDatabase: () => new Database(this.databasePath, { readonly: true, create: false }),
-        appendWorkStateEntry: entry => this.appendWorkStateEntry!(entry),
-        homeProject: () => this.homeProject ?? getProjectContext(homedir()).primary,
-        localDeviceId: () => this.getLocalDeviceId(),
-      }) : null)
-      : options.hostedIntent;
+    // PWM fork: hosted intent extraction uploads prompts to the vendor's cloud; it is never built.
+    this.hostedIntent = options.hostedIntent ?? null;
     if (this.hostedIntent) this.setupScan?.setExtractor((prompts, improveProduct) => this.hostedIntent!.run(prompts, improveProduct));
     this.unsubscribeHistoryImport = this.historyImport?.subscribe(state => this.broadcast('setup-import', state)) ?? null;
     // Hosted extraction is awaited inside the scan, so failures stay in the scan screen's error slot.
@@ -674,7 +660,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     const state = readSetupState(this.setupStatePath);
     if (state.checkout?.state === 'paid') { res.setHeader('Cache-Control', 'no-store'); res.json(this.setupStateView(state)); return; }
     if (state.choice?.branch !== 'go' || state.installer?.stage !== 'go-awaiting-checkout') {
-      res.status(409).json({ error: 'Checkout opens once the terminal has started your CMEM Pro sign-in.', state: this.setupStateView(state) });
+      res.status(409).json({ error: 'Checkout is not available in this build.', state: this.setupStateView(state) });
       return;
     }
     const requests = (state.checkout?.requests ?? 0) + 1;

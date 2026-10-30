@@ -190,7 +190,8 @@ describe('reasoning budget exhaustion', () => {
     for (const spy of spies.splice(0)) spy.mockRestore();
   });
 
-  it('sends reasoning disabled on OpenRouter and cmem observation requests by default', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('sends reasoning disabled on OpenRouter and cmem observation requests by default', () => {
     const label = { kind: 'observation' as const, sessionId: 'sess' };
     const openrouter = buildOpenRouterRequestBody({
       model: 'deepseek/deepseek-v4-flash',
@@ -303,7 +304,8 @@ describe('reasoning budget exhaustion', () => {
     }
   });
 
-  it('openrouter.ai and the cmem gateway get the observation on the first request', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('openrouter.ai and the cmem gateway get the observation on the first request', async () => {
     const seen: Body[] = [];
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String((init as RequestInit).body)) as Body;
@@ -536,7 +538,8 @@ describe('reasoning budget exhaustion', () => {
 describe('observer auth method', () => {
   const settings = () => SettingsDefaultsManager.getAllDefaults();
 
-  it('names the active provider instead of always describing Claude', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('names the active provider instead of always describing Claude', () => {
     const defaults = settings();
     expect(describeObserverAuthMethod('claude', defaults)).toBe(getAuthMethodDescription());
     expect(describeObserverAuthMethod('codex', defaults)).toBe('Codex CLI subscription');

@@ -477,7 +477,7 @@ export function tryAdmitCmemGatewayProbe(nowMs: number = Date.now()): QuotaProbe
   if (!cooldowns.has('cmem-gateway')) {
     cooldowns.set('cmem-gateway', {
       provider: 'cmem-gateway',
-      message: 'cmem.ai gateway re-probe',
+      message: 'hosted gateway re-probe',
       armedAtMs: 0,
       probeInFlightSinceMs: null,
       probeClaimId: null,

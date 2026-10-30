@@ -283,7 +283,8 @@ describe('the request judge', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('a Jev client comes only from the CMEM Pro gateway or openrouter.ai, with the matching key', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('a Jev client comes only from the CMEM Pro gateway or openrouter.ai, with the matching key', async () => {
     const none = () => undefined;
     let sent: { url: string; body: any; authorization: string | null } | null = null;
     const fetchImpl = (async (url: string, init: RequestInit) => {

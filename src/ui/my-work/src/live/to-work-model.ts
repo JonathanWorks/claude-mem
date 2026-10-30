@@ -1,4 +1,4 @@
-// The one pure mapper from a WorkViewSnapshot (local worker today, cmem.ai later) to the WorkModel the screens use.
+// The one pure mapper from a WorkViewSnapshot (local worker today, the hosted service later) to the WorkModel the screens use.
 // It follows the plan's mapping table. Where the snapshot has no value, the field takes the table's "missing" value;
 // nothing is estimated or made up (spec §12). Relative imports with .ts extensions so `node --test` can load it.
 import { assertConsistentRequest, type WorkProductKind, type Agent, type AgentTool, type CurrentPeriod, type Device, type FocusArea, type PastPeriod, type Request, type SkillRun } from '../data.ts'

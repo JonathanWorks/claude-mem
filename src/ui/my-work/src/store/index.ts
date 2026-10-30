@@ -71,7 +71,7 @@ export function useConnection(): ConnectionStatus {
 /** True for a few seconds after this request's recorded content changed. */
 export const useFreshlyUpdated = (requestId: string) => useStore((state) => state.work.freshlyUpdatedIds.has(requestId))
 
-/** Where the work is seen: in sample mode the wireframe's switch, otherwise the source (the local worker is at home, cmem.ai on the go). */
+/** Where the work is seen: in sample mode the wireframe's switch, otherwise the source (the local worker is at home, the hosted service on the go). */
 export function useWorkspace(): Workspace {
   return useStore(useShallow((state) => {
     const { mode, team, connected } = state.view.workspace

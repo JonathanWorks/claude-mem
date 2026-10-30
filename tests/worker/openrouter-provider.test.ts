@@ -60,7 +60,8 @@ describe('OpenRouterProvider token compatibility', () => {
 
   // The non-streamed (cmem gateway) request is the one this module calls fetch
   // for; a streamed request goes through worker-utils' fetchStreamWithIdleTimeout.
-  it('invokes the runtime fetch with globalThis as its receiver', async () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('invokes the runtime fetch with globalThis as its receiver', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = function (this: typeof globalThis, _input, init) {
       if (this !== globalThis) {

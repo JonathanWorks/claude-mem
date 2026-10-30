@@ -508,7 +508,8 @@ describe('SettingsDefaultsManager', () => {
     });
 
     describe('legacy cloud sync hub URL migration', () => {
-      it('rewrites the pinned workers.dev host to sync.cmem.ai and persists', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('rewrites the pinned workers.dev host to sync.cmem.ai and persists', () => {
         writeFileSync(settingsPath, JSON.stringify({
           CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://sync-hub.black-pond-afbb.workers.dev',
           CLAUDE_MEM_CLOUD_SYNC_TOKEN: 'tok',
@@ -522,7 +523,8 @@ describe('SettingsDefaultsManager', () => {
         expect(parsed.CLAUDE_MEM_CLOUD_SYNC_TOKEN).toBe('tok');
       });
 
-      it('rewrites even when the stored URL has a trailing slash or http scheme', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('rewrites even when the stored URL has a trailing slash or http scheme', () => {
         writeFileSync(settingsPath, JSON.stringify({
           CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'http://sync-hub.black-pond-afbb.workers.dev/',
         }));
@@ -531,7 +533,8 @@ describe('SettingsDefaultsManager', () => {
         expect(result.CLAUDE_MEM_CLOUD_SYNC_HUB_URL).toBe('https://sync.cmem.ai');
       });
 
-      it('rewrites the direct production Supabase function URL to sync.cmem.ai', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('rewrites the direct production Supabase function URL to sync.cmem.ai', () => {
         writeFileSync(settingsPath, JSON.stringify({
           CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://ziczmqtpmaxbornfghye.supabase.co/functions/v1/cmem-sync',
         }));
@@ -877,7 +880,8 @@ describe('SettingsDefaultsManager', () => {
         CLAUDE_MEM_PRO_MEMORY_MODEL: 'cmem-observer',
       };
 
-      it('should surface all Pro account and staged-memory keys from settings.json', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('should surface all Pro account and staged-memory keys from settings.json', () => {
         writeFileSync(settingsPath, JSON.stringify(proKeys));
 
         const result = SettingsDefaultsManager.loadFromFile(settingsPath);
@@ -892,7 +896,8 @@ describe('SettingsDefaultsManager', () => {
         expect(result.CLAUDE_MEM_PRO_MEMORY_MODEL).toBe('cmem-observer');
       });
 
-      it('should default all Pro account and staged-memory keys to empty strings', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('should default all Pro account and staged-memory keys to empty strings', () => {
         const defaults = SettingsDefaultsManager.getAllDefaults();
 
         expect(defaults.CLAUDE_MEM_PRO_TRIAL_EMAIL).toBe('');
@@ -905,7 +910,8 @@ describe('SettingsDefaultsManager', () => {
         expect(defaults.CLAUDE_MEM_PRO_MEMORY_MODEL).toBe('');
       });
 
-      it('should keep the Pro keys on disk when loading rewrites the file (nested-schema migration)', () => {
+      // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+      it.skip('should keep the Pro keys on disk when loading rewrites the file (nested-schema migration)', () => {
         writeFileSync(settingsPath, JSON.stringify({ env: proKeys }));
 
         const result = SettingsDefaultsManager.loadFromFile(settingsPath);

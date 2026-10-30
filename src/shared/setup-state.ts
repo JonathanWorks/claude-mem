@@ -127,7 +127,7 @@ function writeJsonAtomically(path: string, value: unknown): void {
 
 const filled = (value: unknown): boolean => typeof value === 'string' && value.trim().length > 0;
 
-/** CMEM Pro observer on the cmem.ai gateway, or a configured cloud sync connection. */
+/** CMEM Pro observer on the hosted gateway, or a configured cloud sync connection. */
 export function hasProConfiguration(settings: Record<string, unknown>): boolean {
   const proObserver = settings.CLAUDE_MEM_PROVIDER === 'openrouter'
     && filled(settings.CLAUDE_MEM_OPENROUTER_API_KEY)
