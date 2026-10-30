@@ -35,16 +35,28 @@ SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cu
 # Everything npm publishes, except dist/ (built from src/, which the SOURCE tier covers).
 command -v node >/dev/null || { echo "FAIL: node is required to read package.json files" >&2; exit 2; }
 # package.json itself ships (its scripts run at install), and so do its main/bin/exports targets.
+# Targets are normalised and validated: anything that is not a plain relative path inside the repo
+# (git pathspec magic such as ":!plugin", "..", an absolute path) fails the guard rather than
+# reaching git grep. README/LICENSE are not scanned: this fork does not publish to npm.
 files_list="$(node -e '
+const path = require("path");
 const p = require("./package.json");
 if (!Array.isArray(p.files) || p.files.length === 0) process.exit(3);
 const out = new Set(["package.json", ...p.files]);
 const add = (v) => {
-  if (typeof v === "string") out.add(v.replace(/^\.\//, "").replace(/\*.*$/, "").replace(/\/$/, "") || ".");
-  else if (v && typeof v === "object") Object.values(v).forEach(add);
+  if (typeof v === "string") {
+    const t = path.posix.normalize(v.replace(/\*.*$/, "")).replace(/^\.\//, "").replace(/\/$/, "");
+    if (t.startsWith(":") || t.startsWith("/") || t === ".." || t.startsWith("../") || t.includes("/../")) {
+      console.error("unsafe package.json target: " + v); process.exit(4);
+    }
+    out.add(t);
+  } else if (v && typeof v === "object") Object.values(v).forEach(add);
 };
 add(p.main); add(p.bin); add(p.exports);
-for (const e of out) if (e && e !== "." && !e.startsWith("dist")) console.log(e);
+for (const e of out) {
+  if (e.startsWith(":") || e.startsWith("/")) { console.error("unsafe files entry: " + e); process.exit(4); }
+  if (e && e !== "." && e !== "dist" && !e.startsWith("dist/")) console.log(e);
+}
 ')" ||
   { echo "FAIL: could not read package.json \"files\"" >&2; exit 2; }
 while IFS= read -r entry; do

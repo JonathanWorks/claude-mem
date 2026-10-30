@@ -190,8 +190,9 @@ jobs:
             echo "merged tree changes our workflows or the guard; refusing to publish" >&2
             exit 1
           fi
-          # package.json "files" sets what the guard scans; upstream may bump the version, not the list.
-          files_of() { git show "$1:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.stringify(JSON.parse(s).files)))'; }
+          # package.json "files", main, bin and exports set what the guard scans; upstream may bump the
+          # version, not those.
+          files_of() { git show "$1:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s);console.log(JSON.stringify([p.files,p.main,p.bin,p.exports]))})'; }
           command -v node >/dev/null || { echo "node is required for the package.json check" >&2; exit 1; }
           if [ "$(files_of pwm)" != "$(files_of "$head")" ]; then
             echo "merged tree changes package.json \"files\" (the guard's scope); refusing to publish" >&2
