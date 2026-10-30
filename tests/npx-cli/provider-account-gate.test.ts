@@ -14,11 +14,13 @@ describe('provider account gate', () => {
     expect(providerNeedsAccount('host')).toBe(false);
   });
 
-  it('still requires an account when no provider was named', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('still requires an account when no provider was named', () => {
     expect(providerNeedsAccount(undefined)).toBe(true);
   });
 
-  it('still treats openrouter, gemini and codex as account-backed providers', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('still treats openrouter, gemini and codex as account-backed providers', () => {
     expect(providerNeedsAccount('openrouter')).toBe(true);
     expect(providerNeedsAccount('gemini')).toBe(true);
     expect(providerNeedsAccount('codex')).toBe(true);

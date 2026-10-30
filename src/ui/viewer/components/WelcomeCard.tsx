@@ -7,7 +7,7 @@ interface WelcomeCardProps {
 
 const STORAGE_KEY = 'claude-mem-welcome-dismissed-v3';
 const EXPLAINER_URL = '/api/onboarding/explainer';
-const DOCS_URL = 'https://docs.claude-mem.ai';
+const DOCS_URL = 'https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md';
 
 export function getStoredWelcomeDismissed(): boolean {
   try {

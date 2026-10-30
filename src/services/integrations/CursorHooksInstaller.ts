@@ -609,7 +609,7 @@ Examples:
   claude-mem cursor uninstall            # Remove from current project
   claude-mem cursor status               # Check if hooks are installed
 
-For more info: https://docs.claude-mem.ai/cursor
+For more info: https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md
       `);
       return 0;
     }

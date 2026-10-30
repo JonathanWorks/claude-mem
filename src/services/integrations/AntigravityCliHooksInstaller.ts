@@ -801,7 +801,7 @@ Examples:
   claude-mem antigravity-cli status      # Check if installed
   claude-mem antigravity-cli uninstall   # Remove hooks + MCP
 
-For more info: https://docs.claude-mem.ai/antigravity-cli/setup
+For more info: https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md
       `);
       return 0;
   }

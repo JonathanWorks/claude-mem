@@ -129,7 +129,8 @@ export async function drainProjection(
 	if (decimalAtLeast(state.projected_seq, targetSeq)) {
 		return { ok: true, projectedSeq: state.projected_seq };
 	}
-	if (!env.INTERNAL_PROJECTOR_URL || !env.CMEM_INTERNAL_PROJECTOR_SECRET) {
+	const logOnly = env.PROJECTION_MODE === "log-only";
+	if (!logOnly && (!env.INTERNAL_PROJECTOR_URL || !env.CMEM_INTERNAL_PROJECTOR_SECRET)) {
 		return {
 			ok: false,
 			error: "projection_not_configured",
@@ -196,92 +197,95 @@ export async function drainProjection(
 					retryable: true,
 				};
 			}
-			const requestBody = serializeProjectionRequest({
-				userId,
-				epoch: page.epoch,
-				fromSeqExclusive: page.from_seq_exclusive,
-				throughSeq: page.through_seq,
-				ops: page.ops,
-			});
-			if (encoder.encode(requestBody).length > PROJECTION_PAGE_MAX_BYTES) {
-				return {
-					ok: false,
-					error: "projection_page_too_large",
-					projectedSeq,
-					httpStatus: 503,
-					retryable: true,
-				};
-			}
-			releaseLeaseEarly = false;
-			let response: ProjectionFetchResult;
-			try {
-				response = await fetchProjectionWithTimeout(
-					env.INTERNAL_PROJECTOR_URL,
-					requestBody,
-					env.CMEM_INTERNAL_PROJECTOR_SECRET,
-					dependencies.fetchTimeoutMs,
-					dependencies.fetchImpl,
-				);
-			} catch (error) {
-				if (error instanceof Error && error.message === "projection_upstream_timeout") {
+			// PWM fork: in log-only mode the stored page is the projection; nothing is sent anywhere.
+			if (!logOnly) {
+				const requestBody = serializeProjectionRequest({
+					userId,
+					epoch: page.epoch,
+					fromSeqExclusive: page.from_seq_exclusive,
+					throughSeq: page.through_seq,
+					ops: page.ops,
+				});
+				if (encoder.encode(requestBody).length > PROJECTION_PAGE_MAX_BYTES) {
 					return {
 						ok: false,
-						error: error.message,
+						error: "projection_page_too_large",
 						projectedSeq,
 						httpStatus: 503,
 						retryable: true,
 					};
 				}
-				return {
-					ok: false,
-					error: "projection_upstream_unreachable",
-					projectedSeq,
-					httpStatus: 503,
-					retryable: true,
-				};
-			}
-			if (!response.ok) {
-				if (response.status === 409) {
-					releaseLeaseEarly = true;
+				releaseLeaseEarly = false;
+				let response: ProjectionFetchResult;
+				try {
+					response = await fetchProjectionWithTimeout(
+						env.INTERNAL_PROJECTOR_URL,
+						requestBody,
+						env.CMEM_INTERNAL_PROJECTOR_SECRET,
+						dependencies.fetchTimeoutMs,
+						dependencies.fetchImpl,
+					);
+				} catch (error) {
+					if (error instanceof Error && error.message === "projection_upstream_timeout") {
+						return {
+							ok: false,
+							error: error.message,
+							projectedSeq,
+							httpStatus: 503,
+							retryable: true,
+						};
+					}
 					return {
 						ok: false,
-						error: "projection_upstream_409",
+						error: "projection_upstream_unreachable",
 						projectedSeq,
-						httpStatus: 409,
-						retryable: false,
+						httpStatus: 503,
+						retryable: true,
 					};
 				}
-				return {
-					ok: false,
-					error: `projection_upstream_${response.status}`,
-					projectedSeq,
-					httpStatus: 503,
-					retryable: true,
-				};
-			}
-			let projected: unknown;
-			try { projected = JSON.parse(response.bodyText); } catch {
-				return {
-					ok: false,
-					error: "projection_response_not_json",
-					projectedSeq,
-					httpStatus: 503,
-					retryable: true,
-				};
-			}
-			const result = projected as Record<string, unknown>;
-			if (
-				result.protocol_version !== PROJECTION_PROTOCOL_VERSION
-				|| result.epoch !== page.epoch
-				|| result.projected_through_seq !== page.through_seq
-			) {
-				return {
-					ok: false,
-					error: "projection_response_mismatch",
-					projectedSeq,
-					httpStatus: 503,
-					retryable: true,
-				};
+				if (!response.ok) {
+					if (response.status === 409) {
+						releaseLeaseEarly = true;
+						return {
+							ok: false,
+							error: "projection_upstream_409",
+							projectedSeq,
+							httpStatus: 409,
+							retryable: false,
+						};
+					}
+					return {
+						ok: false,
+						error: `projection_upstream_${response.status}`,
+						projectedSeq,
+						httpStatus: 503,
+						retryable: true,
+					};
+				}
+				let projected: unknown;
+				try { projected = JSON.parse(response.bodyText); } catch {
+					return {
+						ok: false,
+						error: "projection_response_not_json",
+						projectedSeq,
+						httpStatus: 503,
+						retryable: true,
+					};
+				}
+				const result = projected as Record<string, unknown>;
+				if (
+					result.protocol_version !== PROJECTION_PROTOCOL_VERSION
+					|| result.epoch !== page.epoch
+					|| result.projected_through_seq !== page.through_seq
+				) {
+					return {
+						ok: false,
+						error: "projection_response_mismatch",
+						projectedSeq,
+						httpStatus: 503,
+						retryable: true,
+					};
+				}
 			}
 			const checkpointAt = projectionNow(dependencies);
 			state = checkpointAt === undefined

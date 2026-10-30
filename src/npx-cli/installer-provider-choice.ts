@@ -16,6 +16,6 @@ export function resolveInstallerProviderChoice(
   options: { ide?: string; provider?: InstallerProviderId },
 ): InstallerProviderChoice | undefined {
   if (options.provider) return options.provider;
-  if (options.ide === 'grok-bot') return 'cmem';
+  // PWM fork: no hosted default for grok-bot; it falls through to the normal provider choice.
   return undefined;
 }

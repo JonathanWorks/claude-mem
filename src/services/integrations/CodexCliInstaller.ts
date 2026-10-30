@@ -124,7 +124,7 @@ function resolvePluginMarketplaceRoot(preferredRoot?: string): string {
     if (resolved && missingMarketplaceFiles(resolved).length === 0) return resolved;
   }
 
-  throw new Error('Could not locate a Codex marketplace root with .agents/plugins/marketplace.json and plugin/.codex-plugin/plugin.json. Run npx claude-mem@latest install from the package or repo root.');
+  throw new Error('Could not locate a Codex marketplace root with .agents/plugins/marketplace.json and plugin/.codex-plugin/plugin.json. Run npx github:JonathanWorks/claude-mem#pwm install from the package or repo root.');
 }
 
 function lookupCodexOnWindows(): string | null {
@@ -505,7 +505,7 @@ function assertCodexMarketplaceSupported(spawn: CodexSpawn = codexSpawn): void {
   }
 
   if (version.localeCompare(MIN_CODEX_MARKETPLACE_VERSION, undefined, { numeric: true }) < 0) {
-    throw new Error(`Codex CLI ${version} is too old for plugin marketplace support. Update Codex CLI to ${MIN_CODEX_MARKETPLACE_VERSION} or newer, then run: npx claude-mem@latest install`);
+    throw new Error(`Codex CLI ${version} is too old for plugin marketplace support. Update Codex CLI to ${MIN_CODEX_MARKETPLACE_VERSION} or newer, then run: npx github:JonathanWorks/claude-mem#pwm install`);
   }
 }
 
@@ -612,7 +612,7 @@ export async function installCodexCli(marketplaceRootOverride?: string): Promise
 
   if (!commandExists(resolveCodexCommand())) {
     console.error('Codex CLI was not found on PATH.');
-    console.error('Install Codex, then run: npx claude-mem@latest install');
+    console.error('Install Codex, then run: npx github:JonathanWorks/claude-mem#pwm install');
     return 1;
   }
 
@@ -683,7 +683,7 @@ Next steps:
   3. Restart sessions opened before trusting the hooks
 
 For a fresh setup, the supported entry point is:
-  npx claude-mem@latest install
+  npx github:JonathanWorks/claude-mem#pwm install
 `);
   return 0;
 }

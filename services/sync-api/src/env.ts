@@ -1,3 +1,5 @@
+import { parseTokenTable } from "./local-verify";
+
 export interface SyncApiEnv {
 	/** Empty in forward mode (no Postgres is opened). */
 	DATABASE_URL: string;
@@ -13,6 +15,12 @@ export interface SyncApiEnv {
 	FORWARD_ORIGIN: string | null;
 	/** PWM fork: JSON map of sha256(device token) -> user id; non-empty = verify tokens locally (local-verify.ts). */
 	LOCAL_TOKEN_SHA256: string;
+	/**
+	 * PWM fork: "upstream" (default) sends each stored page to INTERNAL_PROJECTOR_URL;
+	 * "log-only" treats a stored page as projected, for a self-hosted hub whose clients sync
+	 * from the op log alone and that has no hosted projector.
+	 */
+	PROJECTION_MODE: "upstream" | "log-only";
 	PORT: number;
 	HOST: string;
 }
@@ -62,7 +70,18 @@ export function parseForwardOrigin(raw: string | undefined): string | null {
 	return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
 }
 
+export function parseProjectionMode(raw: string | undefined): SyncApiEnv["PROJECTION_MODE"] {
+	const mode = (raw ?? "").trim() || "upstream";
+	if (mode !== "upstream" && mode !== "log-only") {
+		throw new Error(`PROJECTION_MODE must be "upstream" or "log-only", got "${mode}"`);
+	}
+	return mode;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): SyncApiEnv {
+	const localTokens = (source.LOCAL_TOKEN_SHA256 ?? "").trim();
+	// Parse at boot so a malformed table stops the hub instead of answering 503 on every request.
+	if (localTokens) parseTokenTable(localTokens);
 	const forwardOrigin = parseForwardOrigin(source.FORWARD_ORIGIN);
 	const databaseUrl = (source.DATABASE_URL ?? "").trim();
 	if (!databaseUrl && forwardOrigin === null) {
@@ -80,7 +99,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): SyncApiEnv {
 		INTERNAL_PROJECTOR_URL: (source.INTERNAL_PROJECTOR_URL ?? "").trim(),
 		CMEM_INTERNAL_PROJECTOR_SECRET: (source.CMEM_INTERNAL_PROJECTOR_SECRET ?? "").trim(),
 		FORWARD_ORIGIN: forwardOrigin,
-		LOCAL_TOKEN_SHA256: (source.LOCAL_TOKEN_SHA256 ?? "").trim(),
+		LOCAL_TOKEN_SHA256: localTokens,
+		PROJECTION_MODE: parseProjectionMode(source.PROJECTION_MODE),
 		PORT: port,
 		HOST: (source.HOST ?? "0.0.0.0").trim() || "0.0.0.0",
 	};

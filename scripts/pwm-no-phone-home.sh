@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 # One pattern per line: what must never ship. Case-insensitive.
 PATTERNS=(
   'cmem\.ai'
+  'claude-mem\.ai'
+  'api\.github\.com/repos/thedotmack'
   'posthog'
   'cmem[ -]?pro\b'
   'cmem[ -]?cloud'
@@ -25,7 +27,7 @@ PATTERNS=(
 )
 # What ships: the installed plugin (built bundles keep only strings and property names) and the hub.
 # src/ is checked separately below for vendor URLs and the telemetry SDK, which would reach a bundle.
-SCOPE=(plugin services)
+SCOPE=(plugin services .claude-plugin)
 # Not code that runs: lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(--glob '!**/package-lock.json' --glob '!**/bun.lock' --glob '!**/*.map' --glob '!CHANGELOG.md')
 
@@ -47,7 +49,12 @@ if [ "$total" -gt 0 ]; then
   echo "FAIL: $total phone-home / upsell reference(s) still ship (run with --list for each one)"
   exit 1
 fi
-src_hits=$(rg -a --no-mmap -n -i "${EXCLUDES[@]}" --glob '!**/*.test.*' -e 'https?://[a-z0-9.-]*cmem\.ai' -e 'posthog' src || true)
+# src/ also builds the npx installer, which keeps unreachable hosted-plan code paths; those carry
+# no endpoint. What must never appear is an endpoint: a vendor URL, the telemetry SDK, the vendor's
+# GitHub API, or the vendor marketplace as a plugin source.
+src_hits=$(rg -a --no-mmap -n -i "${EXCLUDES[@]}" --glob '!**/*.test.*' \
+  -e 'https?://[a-z0-9.-]*(cmem|claude-mem)\.ai' -e 'posthog' -e 'api\.github\.com/repos/thedotmack' \
+  -e "repo: '\''thedotmack/claude-mem'\''" src || true)
 if [ -n "$src_hits" ]; then
   printf '%s\n' "$src_hits"
   echo "FAIL: vendor URL or telemetry SDK still in src/"

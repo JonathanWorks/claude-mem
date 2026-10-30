@@ -9,12 +9,15 @@
  * hub upserts by entity, so a repeat run cannot create duplicates.
  *
  * Usage: bun scripts/pwm-sync-backfill.ts [--db <path>] [--apply]
- * Without --apply it prints the counts it would requeue and changes nothing.
+ * Without --apply it prints the counts it would requeue and changes nothing. --apply refuses to run
+ * until this host is enrolled and its worker has synced once (settings.json next to the database
+ * holds the sync token, user id, hub URL and the device id the worker persists): rows are keyed on
+ * that device id at the hub, so uploading before it is fixed could duplicate them later.
  */
 import { Database } from 'bun:sqlite';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 
 const TABLES = [
   { table: 'observations', kind: 'observation' },
@@ -32,6 +35,27 @@ const apply = process.argv.includes('--apply');
 if (!existsSync(dbPath)) {
   console.error(`pwm-sync-backfill: no database at ${dbPath}; pass --db <path>`);
   process.exit(2);
+}
+
+if (apply) {
+  const settingsPath = join(dirname(dbPath), 'settings.json');
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    console.error(`pwm-sync-backfill: cannot read ${settingsPath}`);
+    process.exit(2);
+  }
+  const missing = [
+    'CLAUDE_MEM_CLOUD_SYNC_TOKEN',
+    'CLAUDE_MEM_CLOUD_SYNC_USER_ID',
+    'CLAUDE_MEM_CLOUD_SYNC_HUB_URL',
+    'CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID',
+  ].filter((key) => typeof settings[key] !== 'string' || (settings[key] as string).trim() === '');
+  if (missing.length > 0) {
+    console.error(`pwm-sync-backfill: enroll this host and let the worker sync once first; missing ${missing.join(', ')}`);
+    process.exit(2);
+  }
 }
 
 const db = new Database(dbPath);

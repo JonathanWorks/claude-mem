@@ -1,6 +1,6 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync, chmodSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync, chmodSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
 import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
@@ -1400,5 +1400,24 @@ describe('transcript-watch config path follows the data dir', () => {
 
   it('is unchanged for the default data dir', () => {
     expect(SettingsDefaultsManager.loadFromFile(settingsPath).CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH).toBe(legacyDefault);
+  });
+});
+
+// PWM fork: vendor endpoints left by an upstream install never survive a load.
+describe('SettingsDefaultsManager drops vendor endpoints (PWM fork)', () => {
+  it('replaces a cmem.ai hub or gateway URL with the default and keeps other URLs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pwm-vendor-'));
+    const path = join(dir, 'settings.json');
+    writeFileSync(path, JSON.stringify({
+      CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://sync.cmem.ai',
+      CLAUDE_MEM_OPENROUTER_BASE_URL: 'https://cmem.ai/api/inference/v1',
+      CLAUDE_MEM_WORKER_HOST: '127.0.0.1',
+    }));
+    const loaded = SettingsDefaultsManager.loadFromFile(path, false, { readOnly: true });
+    const defaults = SettingsDefaultsManager.getAllDefaults();
+    expect(loaded.CLAUDE_MEM_CLOUD_SYNC_HUB_URL).toBe(defaults.CLAUDE_MEM_CLOUD_SYNC_HUB_URL);
+    expect(loaded.CLAUDE_MEM_OPENROUTER_BASE_URL).toBe(defaults.CLAUDE_MEM_OPENROUTER_BASE_URL);
+    expect(loaded.CLAUDE_MEM_WORKER_HOST).toBe('127.0.0.1');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -31,7 +31,7 @@ export type TelemetryConsentExplanation = {
  * 1. DO_NOT_TRACK set (truthy) -> always off
  * 2. CLAUDE_MEM_TELEMETRY env: '0'/'false'/'off' -> off, '1'/'true'/'on' -> on
  * 3. telemetry.json config: enabled === true -> on, enabled === false -> off
- * 4. Default: on (opt-out — anonymous events only; see docs.claude-mem.ai/telemetry)
+ * 4. Default: on (opt-out — anonymous events only; removed in the PWM fork)
  */
 /** Telemetry is removed in the PWM fork: every install answers off, whatever env or config say. */
 export function explainTelemetryConsent(

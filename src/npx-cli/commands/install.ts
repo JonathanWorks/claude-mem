@@ -179,11 +179,12 @@ function registerMarketplace(): void {
   knownMarketplaces['thedotmack'] = {
     source: {
       source: 'github',
-      repo: 'thedotmack/claude-mem',
+      // PWM fork: the marketplace is our fork, and updates come only from a deliberate install.
+      repo: 'JonathanWorks/claude-mem',
     },
     installLocation: marketplaceDirectory(),
     lastUpdated: new Date().toISOString(),
-    autoUpdate: true,
+    autoUpdate: false,
   };
 
   ensureDirectoryExists(pluginsDirectory());
@@ -2070,33 +2071,8 @@ async function requireInstallerOAuthLogin(version: string): Promise<InstallerOAu
  * the do-not-track env var: only telemetry is, and captureCliEvent already honors it.
  * The server ignores `source` today and will allowlist it separately.
  */
-export async function offerDeferredLogin(options: InstallOptions, version: string): Promise<void> {
-  if (isInteractive) return;
-  if (providerNeedsAccount(options.provider)) return;
-  if (process.env.CI) return;
-
-  const pairing = await startInstallerOAuthPairing({
-    source: 'npx-installer-deferred',
-    timeoutMs: OAUTH_DEFERRED_START_TIMEOUT_MS,
-  });
-  if (!pairing) {
-    await captureCliEvent('installer_oauth_start_failed', {
-      version,
-      outcome: lastOAuthStartFailure() ?? 'network',
-      interactive: false,
-      phase: 'deferred',
-    });
-    log.error(lastOAuthStartErrorMessage() ?? 'Could not start the optional claude-mem sign-in. Run npx claude-mem install again when the hosted service is reachable.');
-    return;
-  }
-
-  // Telemetry first so that, in CLAUDE_MEM_TELEMETRY_DEBUG=1 mode, its stderr
-  // line cannot land after the relay instruction an agent reads last.
-  await captureCliEvent('installer_oauth_deferred', { version, interactive: false });
-  log.info('Optional: sign in to claude-mem to unlock cloud sync and the CMEM Pro trial.');
-  log.info(`Sign-in link: ${pairing.authorizationUrl}`);
-  log.info('AGENT: show this link to the user so they can finish signing in. Do not open it yourself; the install is already complete.');
-}
+// PWM fork: there is no hosted sign-in to offer, so a non-interactive install ends without one.
+export async function offerDeferredLogin(_options: InstallOptions, _version: string): Promise<void> {}
 
 export function noteDeviceCode(
   pairing: InstallerOAuthPairing,
@@ -2162,40 +2138,6 @@ export async function completeCmemTrialPairing(
 }
 
 /**
- * Final step of the install flow: tell the user telemetry is on by default
- * (opt-out) and let them decide. Asked ONCE — a telemetry.json with a recorded
- * enabled decision means the user already chose, and we never re-nag. An
- * installId-only config (written by the worker's ID bootstrap) does NOT count
- * as a decision. Respects DO_NOT_TRACK (skip entirely: they already answered),
- * CI, and non-TTY. See docs/public/telemetry.mdx for what is/isn't collected.
- */
-async function promptTelemetryOptIn(): Promise<void> {
-  if (!isInteractive) return;
-  if (process.env.CI) return;
-  const dnt = process.env.DO_NOT_TRACK;
-  if (dnt !== undefined && dnt !== '' && dnt !== '0' && dnt !== 'false') return;
-  const existing = loadTelemetryConfig();
-  if (existing?.enabled !== undefined) return;
-
-  p.log.message(styleText('dim', 
-    'Anonymous install ID only — no prompts, file paths, code, or project names, ever.\n'
-    + 'Details: https://docs.claude-mem.ai/telemetry · Change anytime: claude-mem telemetry disable',
-  ));
-  const consent = await p.confirm({
-    message: 'Share anonymized usage data with CMEM? It is on by default and helps us make the product better.',
-    initialValue: true,
-  });
-  if (p.isCancel(consent)) return;
-
-  saveTelemetryConfig({
-    enabled: consent === true,
-    installId: existing?.installId || randomUUID(),
-    decidedAt: new Date().toISOString(),
-  });
-  log.success(consent ? 'Thanks! Anonymized usage sharing is on.' : 'No problem — telemetry is off.');
-}
-
-/**
  * Whether an install still has an account question to answer.
  *
  * `--provider claude` and `--provider host` are exempt: they use the user's
@@ -2206,8 +2148,9 @@ async function promptTelemetryOptIn(): Promise<void> {
  * like any other. With no flag at all the provider screen can still offer
  * CMEM Pro, so login must happen first.
  */
-export function providerNeedsAccount(provider: InstallOptions['provider']): boolean {
-  return provider !== 'claude' && provider !== 'host';
+// PWM fork: no provider needs a hosted account; the sign-in that gated them is removed.
+export function providerNeedsAccount(_provider: InstallOptions['provider']): boolean {
+  return false;
 }
 
 export interface InstallOptions {
@@ -3167,7 +3110,7 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
     `IDEs:        ${styleText('cyan', selectedIDEs.join(', '))}`,
   ];
   summaryLines.push(`Account:     ${styleText('cyan', browserAccountStatus ?? accountStatus)}`);
-  summaryLines.push(`Cloud sync:  ${styleText('cyan', cloudSyncConfigured ? 'ON (CMEM Pro)' : 'OFF (local)')}`);
+  summaryLines.push(`Cloud sync:  ${styleText('cyan', cloudSyncConfigured ? 'ON (sync hub)' : 'OFF (local)')}`);
   if (autoMemoryStatus === 'disabled') {
     summaryLines.push(`Auto-memory: ${styleText('cyan', 'disabled')} (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1)`);
   } else if (autoMemoryStatus === 'already-disabled') {
@@ -3300,7 +3243,6 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
     p.note(nextSteps.join('\n'), 'Next Steps');
     // Deliberately the last interaction of the flow: consent is asked after
     // the product is installed and working, never as a gate in front of it.
-    await promptTelemetryOptIn();
     if (workerFailedToStart) {
       p.outro(styleText('red', 'claude-mem installed, but the worker did not start.'));
       process.exitCode = 1;
@@ -3331,7 +3273,6 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
     }
   }
 
-  // After promptTelemetryOptIn so a just-made consent choice is honored.
   // ide/provider/runtime_mode/install_method are installer enums, the
   // *_version values are tool version strings — never user data.
   await captureCliEvent('install_completed', {

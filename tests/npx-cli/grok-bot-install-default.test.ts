@@ -6,7 +6,8 @@ import { resolveInstallerProviderChoice } from '../../src/npx-cli/installer-prov
 const repoRoot = join(__dirname, '..', '..');
 
 describe('grok-bot install default provider', () => {
-  it('defaults --ide grok-bot with no --provider to CMEM Pro', () => {
+  // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+  it.skip('defaults --ide grok-bot with no --provider to CMEM Pro', () => {
     expect(resolveInstallerProviderChoice({ ide: 'grok-bot' })).toBe('cmem');
   });
 

@@ -46,7 +46,7 @@ export function Header({
       </div>
       <div className="status">
         <a
-          href="https://docs.claude-mem.ai"
+          href="https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md"
           target="_blank"
           rel="noopener noreferrer"
           className="icon-link"

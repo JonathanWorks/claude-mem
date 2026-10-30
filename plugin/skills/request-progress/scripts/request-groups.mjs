@@ -1210,8 +1210,28 @@ var init_SettingsDefaultsManager = __esm({
       static normalizeWorkerHost(host) {
         return host === "localhost" ? "127.0.0.1" : host;
       }
+      // PWM fork: a settings file or environment written by an upstream install can still name a
+      // vendor endpoint (the hosted sync hub or inference gateway). Any such URL falls back to its
+      // default, so nothing is ever sent to the vendor.
+      static VENDOR_HOST = /(^|\.)(cmem\.ai|claude-mem\.ai)$/i;
+      static dropVendorEndpoints(settings) {
+        for (const key of Object.keys(settings)) {
+          const value = settings[key];
+          if (typeof value !== "string" || !/^\s*https?:\/\//i.test(value)) continue;
+          let host;
+          try {
+            host = new URL(value.trim()).hostname;
+          } catch {
+            continue;
+          }
+          if (!this.VENDOR_HOST.test(host)) continue;
+          console.warn(`[SETTINGS] ${key} pointed at the vendor host ${host}; using the default instead`);
+          settings[key] = this.DEFAULTS[key];
+        }
+      }
       static finalizeSettings(settings, applyEnvOverrides) {
         const result = applyEnvOverrides ? this.applyEnvOverrides(settings) : settings;
+        this.dropVendorEndpoints(result);
         result.CLAUDE_MEM_WORKER_HOST = this.normalizeWorkerHost(result.CLAUDE_MEM_WORKER_HOST);
         const dataDir = result.CLAUDE_MEM_DATA_DIR?.trim();
         if (dataDir && result.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH === this.DEFAULTS.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH) {
