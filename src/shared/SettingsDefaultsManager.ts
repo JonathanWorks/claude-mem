@@ -725,8 +725,8 @@ export class SettingsDefaultsManager {
     const entries = trimmed.split(/[\s,]+/).filter(Boolean);
     if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
     try {
-      // A value that parses as a URL is judged by its host alone (cmem.ai.evil.example is not ours
-      // to block, and is not the vendor).
+      // A value that parses as a URL is judged by its host alone (a lookalike host that merely
+      // starts with the vendor name is not the vendor).
       return this.VENDOR_HOST.test(new URL(trimmed).hostname.replace(/\.+$/, ''));
     } catch {
       // Not a URL; the plain-text check below still applies to endpoint keys.
