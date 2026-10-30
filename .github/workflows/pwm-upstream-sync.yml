@@ -183,16 +183,17 @@ jobs:
           head="refs/heads/upstream-sync/$TAG"
           # The bundle was built by a job that ran upstream code, so nothing in it is trusted: it must
           # descend from both pwm and the release, must not touch our workflows or the guard, and the
-          # verdict comes from re-running the guard here (it only runs git grep over the files).
+          # verdict comes from re-running the guard here (git grep plus `npm pack --dry-run`, run with
+          # GH_TOKEN removed from its environment so an untrusted .npmrc cannot read it).
           git merge-base --is-ancestor pwm "$head"
           git merge-base --is-ancestor "$TAG" "$head"
-          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh .gitattributes; then
+          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh .gitattributes .npmrc; then
             echo "merged tree changes our workflows or the guard; refusing to publish" >&2
             exit 1
           fi
           # package.json "files", main, bin and exports set what the guard scans; upstream may bump the
           # version, not those.
-          files_of() { git show "$1:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s);console.log(JSON.stringify([p.files,p.main,p.bin,p.exports]))})'; }
+          files_of() { git show "$1:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s);console.log(JSON.stringify([p.files,p.main,p.bin,p.exports,p.browser,p.workspaces,p.bundleDependencies,p.bundledDependencies]))})'; }
           command -v node >/dev/null || { echo "node is required for the package.json check" >&2; exit 1; }
           if [ "$(files_of pwm)" != "$(files_of "$head")" ]; then
             echo "merged tree changes package.json \"files\" (the guard's scope); refusing to publish" >&2
@@ -205,7 +206,7 @@ jobs:
           fi
           # The diff check above proves the merged tree's guard is byte-identical to ours.
           git worktree add --quiet --detach ../merged "$head"
-          if (cd ../merged && bash scripts/pwm-no-phone-home.sh > ../guard-verdict.log 2>&1); then guard_ok=1; else guard_ok=0; fi
+          if (cd ../merged && env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/pwm-no-phone-home.sh > ../guard-verdict.log 2>&1); then guard_ok=1; else guard_ok=0; fi
           gh auth setup-git
           if ! git push origin "upstream-sync/$TAG" 2> ../push.log; then
             # Upstream commits that touch workflow files can be refused for the default token.

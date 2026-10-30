@@ -32,7 +32,8 @@ if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$root" ]; then
   exit 2
 fi
 
-SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install)
+SHIPPED=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install
+  .codex-plugin .qoder-plugin .agents omp hermes ods pi dsh)
 command -v node >/dev/null || { echo "FAIL: node is required" >&2; exit 2; }
 command -v npm >/dev/null || { echo "FAIL: npm is required" >&2; exit 2; }
 
@@ -77,17 +78,27 @@ out_source=$(scan "$SOURCE_PATTERN" src scripts ':(exclude)scripts/pwm-no-phone-
 # What npm publishes is whatever `npm pack` says it is: the guard asks npm instead of re-deriving
 # its file selection. Built dist/ files (compiled from src/ and scripts/) get the endpoint pattern;
 # every other published file gets the full shipped pattern. Any npm or read failure fails closed.
+if node -e 'const p=require("./package.json"); process.exit(p.bundleDependencies || p.bundledDependencies || p.workspaces ? 0 : 1)'; then
+  echo "FAIL: package.json declares bundled dependencies or workspaces; the guard cannot see what they ship" >&2
+  exit 2
+fi
 pack_json="$(npm pack --dry-run --json --ignore-scripts 2>/dev/null)" || { echo "FAIL: npm pack --dry-run failed" >&2; exit 2; }
 out_pack=$(PACK_JSON="$pack_json" SHIPPED_RE="$SHIPPED_PATTERN" SOURCE_RE="$SOURCE_PATTERN" node -e '
 const fs = require("fs");
 let files;
-try { files = JSON.parse(process.env.PACK_JSON)[0].files.map((f) => f.path); } catch { process.exit(2); }
+try {
+  const packs = JSON.parse(process.env.PACK_JSON);
+  if (!Array.isArray(packs) || packs.length !== 1) process.exit(2);
+  files = packs[0].files.map((f) => f.path);
+} catch { process.exit(2); }
 if (!files || files.length === 0) process.exit(2);
-const shipped = new RegExp(process.env.SHIPPED_RE, "i");
-const source = new RegExp(process.env.SOURCE_RE, "i");
+// grep -E bracket classes are not JavaScript: translate the one the patterns use.
+const js = (re) => new RegExp(re.replace(/\[:space:\]/g, "\\s"), "i");
+const shipped = js(process.env.SHIPPED_RE);
+const source = js(process.env.SOURCE_RE);
 let hit = false;
 for (const f of files) {
-  if (f === "package-lock.json" || f === "CHANGELOG.md" || f === "README.md" || /^LICENSE/.test(f)) continue;
+  if (["package-lock.json", "CHANGELOG.md", "README.md", "LICENSE", "LICENSE.md", "LICENSE.txt"].includes(f)) continue;
   let text;
   try { text = fs.readFileSync(f, "latin1"); } catch { console.error("cannot read " + f); process.exit(2); }
   const re = f.startsWith("dist/") ? source : shipped;

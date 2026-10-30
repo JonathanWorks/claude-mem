@@ -80,7 +80,6 @@
     "worker:logs": "node scripts/worker-logs.cjs",
     "worker:tail": "node scripts/worker-logs.cjs --follow",
     "changelog:generate": "node scripts/generate-changelog.js",
-    "discord:notify": "node scripts/discord-release-notify.js",
     "worker:start": "bun plugin/scripts/worker-service.cjs start",
     "worker:stop": "bun plugin/scripts/worker-service.cjs stop",
     "worker:restart": "bun plugin/scripts/worker-service.cjs restart",
