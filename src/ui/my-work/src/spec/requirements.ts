@@ -73,7 +73,7 @@ export const REQUIREMENTS: Requirement[] = [
   { id: 'R8.1', section: '8', kind: 'ui', text: 'Replaces the localhost:377** viewer; fully local and live.' },
   { id: 'R8.2', section: '8', kind: 'ui', text: 'Connect Claude.ai / Connect ChatGPT CTAs as the cloud sync funnel entry point.' },
   { id: 'R8.3', section: '8', kind: 'process', text: 'Ships as the flagship claude-mem 14.0.0+ open-source release.' },
-  { id: 'R8.4', section: '8', kind: 'backend', text: 'PostHog telemetry on how agents adhere to work state.' },
+  { id: 'R8.4', section: '8', kind: 'backend', text: 'Telemetry on how agents adhere to work state (removed in the PWM fork).' },
 
   // 9. TeamBrain
   { id: 'R9.1', section: '9', kind: 'ui', text: 'TeamBrain is a natural extension of the same GUI, not a separate app.' },

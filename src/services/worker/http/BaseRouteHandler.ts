@@ -105,7 +105,7 @@ export abstract class BaseRouteHandler {
     // pollutes error tracking with noise. Only true server faults (5xx, or any
     // non-AppError, which maps to 500) go through logger.failure, whose Error
     // payload routes through logger.error → the error sink → captureException
-    // (Phase 3): a REDACTED $exception to PostHog Error Tracking, consent-gated,
+    // (Phase 3): an exception report (removed in the PWM fork),
     // kill-switch-gated, and rate-limited.
     const isClientError = statusCode >= 400 && statusCode < 500;
     if (isClientError) {

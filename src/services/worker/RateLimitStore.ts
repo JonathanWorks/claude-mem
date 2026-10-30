@@ -349,7 +349,7 @@ function normalizeResetTimeMs(resetsAt: number | undefined): number | undefined 
 }
 
 /**
- * PostHog properties for one `usage_limit_hit` event. Closed enums, a
+ * Properties for one `usage_limit_hit` event. Closed enums, a
  * boolean, and one integer — never the provider's message text.
  */
 export function buildUsageLimitHitProps(

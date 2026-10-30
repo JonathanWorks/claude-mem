@@ -863,7 +863,7 @@ export async function processAgentResponse(
     provider: providerName,
     // Settings are raw JSON passthrough, so a misconfigured model can arrive
     // as an array/null; the scrubber drops non-strings silently, which read
-    // as "no model" in PostHog — stamp 'unknown' instead.
+    // as "no model" — stamp 'unknown' instead.
     model: typeof modelId === 'string' && modelId ? modelId : 'unknown',
     ide: session.platformSource,
     // Observed-session identity (NOT the observer): the model the user's IDE
@@ -900,7 +900,7 @@ export async function processAgentResponse(
       tokens_output: usage?.output,
       cost_usd: usage?.costUsd,
       // input > 0 guard: a gateway that reports output without input must not
-      // produce a literal 0.0 ratio (it crushed per-model averages in PostHog).
+      // produce a literal 0.0 ratio (it crushed per-model averages).
       compression_ratio:
         usage && usage.input > 0 && usage.output > 0
           ? Math.round((usage.input / usage.output) * 100) / 100

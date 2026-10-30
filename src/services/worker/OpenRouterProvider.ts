@@ -515,7 +515,7 @@ const CLAUDE_MEM_VERSION = typeof __DEFAULT_PACKAGE_VERSION__ !== 'undefined' ? 
 
 /**
  * `session_id` and `trace` for a request that reaches OpenRouter, shaped for
- * OpenRouter Broadcast to PostHog: `session_id` → $ai_session_id,
+ * OpenRouter request metadata: `session_id` → $ai_session_id,
  * `trace_id` → $ai_trace_id, `generation_name` → $ai_span_name, any other
  * trace key → metadata_<key>. The session id is also OpenRouter's
  * sticky-routing key, so a session stays on the provider that holds its prompt

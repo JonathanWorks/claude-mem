@@ -662,7 +662,7 @@ export class WorkerService implements WorkerRef {
     const port = getWorkerPort();
     const host = getWorkerHost();
 
-    // Phase 3 telemetry: bridge logged errors into PostHog Error Tracking
+    // Phase 3 telemetry: bridge logged errors into error reporting (a no-op in the PWM fork)
     // WITHOUT the logger importing telemetry (no import cycle). captureException
     // enforces consent + kill-switch + rate-limit internally and never throws.
     // enableExceptionAutocaptureForWorker() must run BEFORE the first capture

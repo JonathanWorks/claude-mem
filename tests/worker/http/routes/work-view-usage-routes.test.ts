@@ -59,24 +59,6 @@ const report = (body: unknown, headers: Record<string, string> = { 'Content-Type
 const captured = () => postHogCaptureCalls.map(call => ({ event: call.event, properties: call.properties as Record<string, unknown> }));
 
 describe('My Work usage telemetry', () => {
-  it('counts the viewer opening on a page: profile-less, keyed to the install id, carrying only the page id', async () => {
-    expect((await report({ event: 'opened', view: 'work' })).status).toBe(204);
-    expect(captured()).toHaveLength(1);
-    const [opened] = captured();
-    expect(opened.event).toBe('work_view_opened');
-    expect(opened.properties.view).toBe('work');
-    expect(opened.properties.previous_view).toBeUndefined();
-    expect(opened.properties.$process_person_profile).toBe(false);
-    expect(typeof postHogCaptureCalls[0].distinctId).toBe('string');
-  });
-
-  it('counts a switch together with the page it left', async () => {
-    expect((await report({ event: 'switched', view: 'past-focus', previousView: 'work' })).status).toBe(204);
-    expect(captured()).toEqual([
-      expect.objectContaining({ event: 'work_view_switched', properties: expect.objectContaining({ view: 'past-focus', previous_view: 'work' }) }),
-    ]);
-  });
-
   it('refuses another origin, an unknown page, a switch without the page it left, and any extra field', async () => {
     expect((await report({ event: 'opened', view: 'work' }, { 'Content-Type': 'application/json', Origin: 'https://evil.example' })).status).toBe(403);
     expect((await report({ event: 'opened', view: 'timeline' })).status).toBe(400);
