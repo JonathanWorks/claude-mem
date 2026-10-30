@@ -219,7 +219,7 @@ async function main() {
 
   const encodedTitle = encodeURIComponent(result.title);
   const encodedBody = encodeURIComponent(result.body);
-  const githubUrl = `https://github.com/thedotmack/claude-mem/issues/new?title=${encodedTitle}&body=${encodedBody}`;
+  const githubUrl = `https://github.com/JonathanWorks/claude-mem/issues/new?title=${encodedTitle}&body=${encodedBody}`;
 
   console.log("─".repeat(60));
   console.log("📋 BUG REPORT GENERATED");
