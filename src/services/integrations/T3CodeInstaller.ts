@@ -254,7 +254,7 @@ export async function installT3Code(marketplaceRoot: string, options: T3CodeOpti
           if (!isRecord(marketplace)) {
             runProvider(provider, ['plugin', 'marketplace', 'add', root], spawn);
           } else if (marketplace.installLocation !== root
-            && (!isRecord(marketplace.source) || (marketplace.source.repo !== 'thedotmack/claude-mem' && marketplace.source.path !== root))) {
+            && (!isRecord(marketplace.source) || (!['JonathanWorks/claude-mem', 'thedotmack/claude-mem'].includes(String(marketplace.source.repo)) && marketplace.source.path !== root))) {
             throw new Error('The thedotmack marketplace points to another source. Repair its registration with the main Claude-Mem installer.');
           } else if (marketplace.installLocation !== root) {
             // Keep other marketplace entries and installed plugins intact while

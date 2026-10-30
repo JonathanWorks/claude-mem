@@ -6,7 +6,7 @@
   "version": "15.6.0",
   "license": "Apache-2.0",
   "author": "thedotmack",
-  "homepage": "https://claude-mem.ai",
+  "homepage": "https://github.com/JonathanWorks/claude-mem",
   "skills": [
     "skills/make-plan",
     "skills/do"

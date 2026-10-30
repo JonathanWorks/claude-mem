@@ -66,3 +66,23 @@ describe("log-only projection (self-hosted hub)", () => {
 		expect(() => loadEnv({ DATABASE_URL: DEFAULT_DATABASE_URL, LOCAL_TOKEN_SHA256: '{"ABC":"u"}' })).toThrow(/LOCAL_TOKEN_SHA256/);
 	});
 });
+
+describe("log-only projection under concurrent pushes", () => {
+	it("acks every concurrent push instead of answering projection_busy", async () => {
+		const userId = `user-${crypto.randomUUID()}`;
+		const app = await startLogOnlyHub(userId);
+		const pushes = await Promise.all(Array.from({ length: 8 }, async (_, device) => {
+			const ops = await Promise.all(Array.from({ length: 40 }, (_, i) => observationOp(String(i + 1), "1", `dev-${device}`)));
+			return fetch(`${app.url}/v1/sync/ops`, {
+				method: "POST",
+				headers: { ...headers(userId, `dev-${device}`), "Content-Type": "application/json" },
+				body: JSON.stringify({ protocol_version: 2, ops }),
+			});
+		}));
+		const statuses = pushes.map((r) => r.status);
+		expect(statuses).toEqual(Array(8).fill(200));
+		const status = await (await fetch(`${app.url}/v1/sync/status`, { headers: headers(userId, "dev-0") })).json() as { head_seq: string; projected_seq: string };
+		expect(status.head_seq).toBe("320");
+		expect(status.projected_seq).toBe("320");
+	});
+});

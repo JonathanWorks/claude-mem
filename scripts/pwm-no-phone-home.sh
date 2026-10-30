@@ -27,7 +27,7 @@ PATTERNS=(
 )
 # What ships: the installed plugin (built bundles keep only strings and property names) and the hub.
 # src/ is checked separately below for vendor URLs and the telemetry SDK, which would reach a bundle.
-SCOPE=(plugin services .claude-plugin)
+SCOPE=(plugin services .claude-plugin claude-mem-cursor claude-mem-grok-bot cursor-hooks openclaw install)
 # Not code that runs: lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(--glob '!**/package-lock.json' --glob '!**/bun.lock' --glob '!**/*.map' --glob '!CHANGELOG.md')
 
@@ -54,7 +54,7 @@ fi
 # GitHub API, or the vendor marketplace as a plugin source.
 src_hits=$(rg -a --no-mmap -n -i "${EXCLUDES[@]}" --glob '!**/*.test.*' \
   -e 'https?://[a-z0-9.-]*(cmem|claude-mem)\.ai' -e 'posthog' -e 'api\.github\.com/repos/thedotmack' \
-  -e "repo: '\''thedotmack/claude-mem'\''" src || true)
+  -e "repo: *['\"\`]thedotmack/claude-mem" src || true)
 if [ -n "$src_hits" ]; then
   printf '%s\n' "$src_hits"
   echo "FAIL: vendor URL or telemetry SDK still in src/"

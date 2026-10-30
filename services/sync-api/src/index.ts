@@ -405,7 +405,7 @@ export async function startSyncApi(
 	});
 	await applyMigrations(sql);
 	const sockets = new SocketRegistry();
-	const store = new HubStore(sql, sockets, timeouts.userTurnMaxWaitMs);
+	const store = new HubStore(sql, sockets, timeouts.userTurnMaxWaitMs, env.PROJECTION_MODE === "log-only");
 
 	const ctx = { env, store, sockets, sql };
 
@@ -539,6 +539,8 @@ if (isMain) {
 		event: "ready",
 		url: app.url,
 		mode: env.FORWARD_ORIGIN !== null ? "forward" : "hub",
+		projection: env.PROJECTION_MODE,
+		token_verify: env.LOCAL_TOKEN_SHA256 ? "local" : env.TOKEN_VERIFY_URL ? "remote" : "none",
 		...(env.FORWARD_ORIGIN !== null ? { forward_origin: env.FORWARD_ORIGIN } : {}),
 	}));
 	const shutdown = async (): Promise<void> => {

@@ -229,6 +229,8 @@ export class HubStore {
 		private readonly sql: postgres.Sql,
 		private readonly sockets: SocketRegistry,
 		private readonly userTurnMaxWaitMs = DEFAULT_USER_TURN_MAX_WAIT_MS,
+		/** PWM fork: PROJECTION_MODE=log-only — a committed op is projected in the same transaction. */
+		private readonly logOnlyProjection = false,
 	) {}
 
 	/**
@@ -452,11 +454,19 @@ export class HubStore {
 				if (inserted.length > 0) {
 					await this.insertOps(tx, userId, inserted, nowDecimal);
 					await this.upsertEntityHeads(tx, userId, [...finalHeads.values()]);
-					await tx`
-						UPDATE sync_users
-						SET head_seq = ${head}, updated_at = now()
-						WHERE user_id = ${userId}
-					`;
+					if (this.logOnlyProjection) {
+						await tx`
+							UPDATE sync_users
+							SET head_seq = ${head}, projected_seq = ${head}, updated_at = now()
+							WHERE user_id = ${userId}
+						`;
+					} else {
+						await tx`
+							UPDATE sync_users
+							SET head_seq = ${head}, updated_at = now()
+							WHERE user_id = ${userId}
+						`;
+					}
 				}
 			}, signal);
 		} catch (error) {

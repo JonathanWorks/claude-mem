@@ -1,7 +1,7 @@
 {
   "name": "claude-mem-grok-bot",
   "version": "15.6.0",
-  "description": "Persistent memory for Grok Bot. No host hooks: transcript watcher plus MCP. Local worker with host-login observer, or remote cmem.ai. Install without Cursor.",
+  "description": "Persistent memory for Grok Bot. No host hooks: transcript watcher plus MCP. Local worker with host-login observer or a self-hosted server. Install without Cursor.",
   "author": {
     "name": "Alex Newman"
   },
@@ -24,7 +24,7 @@
       "CLAUDE_MEM_MCP_URL": {
         "type": "string",
         "title": "Remote MCP URL",
-        "description": "Leave empty for a local worker (stdio). Set to https://cmem.ai/api/mcp for remote."
+        "description": "Leave empty for a local worker (stdio). Set to your own server's /api/mcp for remote."
       },
       "CLAUDE_MEM_MCP_TOKEN": {
         "type": "string",

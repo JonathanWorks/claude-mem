@@ -1488,7 +1488,7 @@ print_completion_summary() {
   fi
   echo ""
   echo -e "  ${COLOR_BOLD}To re-run this installer:${COLOR_RESET}"
-  echo "  bash <(curl -fsSL https://install.cmem.ai/openclaw.sh)"
+  echo "  bash openclaw/install.sh   # from a checkout of github.com/JonathanWorks/claude-mem"
   echo ""
 }
 

@@ -12,7 +12,6 @@ Use claude-mem's persistent memory in Cursor without a Claude Code subscription.
 - **Context injection** via `.cursor/rules/` - relevant history included in every chat
 - **Web viewer** at http://localhost:37777 - browse and search your project history
 
-✨ **30 Day Free Trial — memory runs off-plan. Get up to 100% more usage from your plan** → https://cmem.ai/pro?from=docs
 
 **Why This Matters**: Every Cursor session starts fresh. Claude-mem bridges that gap - your AI agent builds cumulative knowledge about your codebase, decisions, and patterns over time.
 
@@ -149,7 +148,6 @@ The worker runs in the background and handles:
 
 4. **Open the web viewer**: http://localhost:37777
 
-✨ **30 Day Free Trial — memory runs off-plan. Get up to 100% more usage from your plan** → https://cmem.ai/pro?from=docs
 
 ## How It Works
 
@@ -194,7 +192,7 @@ If you hit Gemini's no-billing rate limit:
 
 - Read [README.md](README.md) for detailed hook documentation
 - Check [CONTEXT-INJECTION.md](CONTEXT-INJECTION.md) for context behavior details
-- Visit https://docs.claude-mem.ai for full documentation
+- Visit https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md for full documentation
 
 ## Quick Reference
 

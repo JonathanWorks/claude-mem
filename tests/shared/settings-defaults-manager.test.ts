@@ -1421,3 +1421,31 @@ describe('SettingsDefaultsManager drops vendor endpoints (PWM fork)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('SettingsDefaultsManager.isVendorEndpoint (PWM fork)', () => {
+  it.each([
+    'https://sync.cmem.ai', 'https://sync.cmem.ai./x', 'https:\\\\cmem.ai\\x', 'wss://sync.cmem.ai',
+    'https://x@cmem.ai', 'http://cmem.ai:443', 'HTTPS://CMEM.AI', 'https://cmem%2Eai', 'cmem.ai',
+    'https://docs.claude-mem.ai/x', '  https://cmem.ai',
+  ])('flags %s', (value) => {
+    expect(SettingsDefaultsManager.isVendorEndpoint(value)).toBe(true);
+  });
+
+  it.each(['https://notcmem.ai', 'https://cmem-ai.com', 'https://api.deepseek.com', 'https://openrouter.ai/api/v1', '', 'claude', '127.0.0.1'])(
+    'keeps %s',
+    (value) => {
+      expect(SettingsDefaultsManager.isVendorEndpoint(value)).toBe(false);
+    },
+  );
+
+  it('drops a vendor URL that arrives through the environment in get()', () => {
+    const prev = process.env.CLAUDE_MEM_CLOUD_SYNC_HUB_URL;
+    process.env.CLAUDE_MEM_CLOUD_SYNC_HUB_URL = 'https://sync.cmem.ai';
+    try {
+      expect(SettingsDefaultsManager.get('CLAUDE_MEM_CLOUD_SYNC_HUB_URL')).toBe(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_CLOUD_SYNC_HUB_URL);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_MEM_CLOUD_SYNC_HUB_URL;
+      else process.env.CLAUDE_MEM_CLOUD_SYNC_HUB_URL = prev;
+    }
+  });
+});

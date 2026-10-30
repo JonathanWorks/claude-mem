@@ -37,7 +37,8 @@ describe('Install Non-TTY Support', () => {
       expect(installSource).toContain("providerSource = 'persisted'");
     });
 
-    it('offers a deferred login-only sign-in link at the end of a non-interactive install', () => {
+    // PWM fork: asserts a removed vendor path (hosted gateway, Pro, TeamBrain, sync upsell).
+    it.skip('offers a deferred login-only sign-in link at the end of a non-interactive install', () => {
       expect(installSource).toContain("'npx-installer-deferred'");
       expect(installSource).toContain('AGENT: show this link to the user so they can finish signing in.');
       const helperStart = installSource.indexOf('export async function offerDeferredLogin(');

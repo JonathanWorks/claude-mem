@@ -2,7 +2,7 @@
 name: claude-mem-install
 description: >-
   Use this when setting up claude-mem on Cursor: local or remote worker,
-  local host-login observer or remote cmem.ai inference.
+  local host-login observer or a personal OpenRouter key.
 ---
 # Install claude-mem on Cursor
 
@@ -18,7 +18,7 @@ Starts the local worker. Hooks already ship with this plugin. MCP `claude-mem-lo
 
 Observer:
 
-- Remote inference (typical): leave provider as openrouter / cmem.ai (`CLAUDE_MEM_OPENROUTER_BASE_URL=https://cmem.ai/api/inference/v1`)
+- Remote inference: provider openrouter with your own OpenRouter key
 - Local host-login: `--provider host` (loopback shim; never bind the worker port — on macOS the worker is often 37777, so the shim uses 37778)
 
 ## Remote worker
@@ -27,6 +27,6 @@ Observer:
 npx claude-mem install --ide cursor --runtime server --server-url https://YOUR_HOST
 ```
 
-Set plugin variable `CLAUDE_MEM_MCP_TOKEN` for `claude-mem-remote` (`https://cmem.ai/api/mcp` or your server).
+Point an MCP client at your own server's `/api/mcp` with `CLAUDE_MEM_MCP_TOKEN`.
 
 Never restart a healthy worker (RAM queue). No Claude CLI required for host/openrouter.

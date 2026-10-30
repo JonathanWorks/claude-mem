@@ -55,7 +55,6 @@ Context is automatically injected via Cursor's **Rules** system:
 - **Web Viewer**: Access context at `http://localhost:37777`
 - **Manual Request**: Ask the agent to search memory
 
-✨ **30 Day Free Trial — memory runs off-plan. Get up to 100% more usage from your plan** → https://cmem.ai/pro?from=docs
 
 See [CONTEXT-INJECTION.md](CONTEXT-INJECTION.md) for details.
 
@@ -243,6 +242,6 @@ Install on Ubuntu: `apt-get install jq curl`
 
 ## See Also
 
-- [Claude-Mem Documentation](https://docs.claude-mem.ai)
+- [Claude-Mem Documentation](https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md)
 - [Cursor Hooks Reference](../docs/context/cursor-hooks-reference.md)
-- [Claude-Mem Architecture](https://docs.claude-mem.ai/architecture/overview)
+- [Claude-Mem Architecture](https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md)

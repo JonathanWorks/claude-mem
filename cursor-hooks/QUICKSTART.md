@@ -83,7 +83,6 @@ Restart Cursor to load the hooks.
 - Browse sessions, observations, and summaries
 - Search your project history
 
-✨ **30 Day Free Trial — memory runs off-plan. Get up to 100% more usage from your plan** → https://cmem.ai/pro?from=docs
 
 ### Via MCP Tools (if enabled)
 - claude-mem provides search tools via MCP
@@ -110,4 +109,4 @@ Restart Cursor to load the hooks.
 
 - Read [README.md](README.md) for detailed documentation
 - Read [INTEGRATION.md](INTEGRATION.md) for architecture details
-- Visit [claude-mem docs](https://docs.claude-mem.ai) for full feature set
+- Visit [claude-mem docs](https://github.com/JonathanWorks/claude-mem/blob/pwm/PWM-FORK.md) for full feature set

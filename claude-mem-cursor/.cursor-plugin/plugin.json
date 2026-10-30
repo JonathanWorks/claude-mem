@@ -1,7 +1,7 @@
 {
   "name": "claude-mem-cursor",
   "version": "15.6.0",
-  "description": "Persistent memory for Cursor. Hooks ingest tool use; MCP searches past sessions. Works with a local worker or a remote cmem.ai worker, and a local host-login observer or remote inference.",
+  "description": "Persistent memory for Cursor. Hooks ingest tool use; MCP searches past sessions. Works with a local worker or a self-hosted worker, and a local host-login observer or remote inference.",
   "author": {
     "name": "Alex Newman"
   },
@@ -25,7 +25,7 @@
       "CLAUDE_MEM_MCP_URL": {
         "type": "string",
         "title": "Remote MCP URL",
-        "description": "Leave empty for a local worker (stdio). Set to https://cmem.ai/api/mcp (or your server) for remote."
+        "description": "Leave empty for a local worker (stdio). Set to your own server's /api/mcp for remote."
       },
       "CLAUDE_MEM_MCP_TOKEN": {
         "type": "string",

@@ -1197,7 +1197,8 @@ var init_SettingsDefaultsManager = __esm({
         return { ...this.DEFAULTS };
       }
       static get(key) {
-        const value = process.env[key] ?? this.DEFAULTS[key];
+        const raw = process.env[key] ?? this.DEFAULTS[key];
+        const value = typeof raw === "string" && this.isVendorEndpoint(raw) ? this.DEFAULTS[key] : raw;
         if (key === "CLAUDE_MEM_WORKER_HOST") {
           return this.normalizeWorkerHost(value);
         }
@@ -1214,18 +1215,28 @@ var init_SettingsDefaultsManager = __esm({
       // vendor endpoint (the hosted sync hub or inference gateway). Any such URL falls back to its
       // default, so nothing is ever sent to the vendor.
       static VENDOR_HOST = /(^|\.)(cmem\.ai|claude-mem\.ai)$/i;
+      static VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9-])/i;
+      /** True when a settings value names a vendor host, by URL parse (any scheme) or by plain text. */
+      static isVendorEndpoint(value) {
+        const trimmed = value.trim();
+        if (trimmed === "") return false;
+        try {
+          const host = new URL(trimmed).hostname.replace(/\.+$/, "");
+          if (this.VENDOR_HOST.test(host)) return true;
+        } catch {
+        }
+        let decoded = trimmed;
+        try {
+          decoded = decodeURIComponent(trimmed);
+        } catch {
+        }
+        return this.VENDOR_TEXT.test(decoded.normalize("NFKC"));
+      }
       static dropVendorEndpoints(settings) {
         for (const key of Object.keys(settings)) {
           const value = settings[key];
-          if (typeof value !== "string" || !/^\s*https?:\/\//i.test(value)) continue;
-          let host;
-          try {
-            host = new URL(value.trim()).hostname;
-          } catch {
-            continue;
-          }
-          if (!this.VENDOR_HOST.test(host)) continue;
-          console.warn(`[SETTINGS] ${key} pointed at the vendor host ${host}; using the default instead`);
+          if (typeof value !== "string" || !this.isVendorEndpoint(value)) continue;
+          console.warn(`[SETTINGS] ${key} named a vendor host; using the default instead`);
           settings[key] = this.DEFAULTS[key];
         }
       }

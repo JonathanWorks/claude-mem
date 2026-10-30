@@ -78,11 +78,14 @@ jobs:
           git merge --no-ff --no-commit "$TAG" || true
           # Built bundles are regenerated below, so their conflicts resolve to upstream's copy.
           git diff --name-only --diff-filter=U | { grep -E '^plugin/(scripts|ui|sqlite)/|\.map$' || true; } | while IFS= read -r f; do
-            git checkout --theirs -- "$f" && git add -- "$f"
+            # Upstream deleted a bundle we changed: there is no "theirs", so the file goes.
+            if git checkout --theirs -- "$f" 2>/dev/null; then git add -- "$f"; else git rm -q -- "$f"; fi
           done
-          # Our workflows are ours: upstream workflow changes are dropped (the default token cannot
-          # push them, and upstream's publish/deploy jobs must not return).
+          # Our workflows are ours: upstream workflow changes, including new files, are dropped (the
+          # default token cannot push them, and upstream's publish/deploy jobs must not return).
+          git rm -r -q --cached .github/workflows
           git checkout HEAD -- .github/workflows
+          git clean -fdq .github/workflows
           remaining="$(git diff --name-only --diff-filter=U)"
           if [ -n "$remaining" ]; then
             printf '%s\n' "$remaining" > conflicts.txt
@@ -175,11 +178,35 @@ jobs:
           STATUS: ${{ needs.merge.outputs.status }}
         run: |
           set -euo pipefail
+          git fetch --quiet https://github.com/thedotmack/claude-mem.git "refs/tags/$TAG:refs/tags/$TAG"
           git fetch --quiet sync/merge.bundle "HEAD:refs/heads/upstream-sync/$TAG"
+          head="refs/heads/upstream-sync/$TAG"
+          # The bundle was built by a job that ran upstream code, so nothing in it is trusted: it must
+          # descend from both pwm and the release, must not touch our workflows or the guard, and the
+          # verdict comes from re-running the guard here (the guard only reads files with rg).
+          git merge-base --is-ancestor pwm "$head"
+          git merge-base --is-ancestor "$TAG" "$head"
+          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh; then
+            echo "merged tree changes our workflows or the guard; refusing to publish" >&2
+            exit 1
+          fi
+          cp scripts/pwm-no-phone-home.sh ../guard.sh
+          git worktree add --quiet --detach ../merged "$head"
+          if (cd ../merged && bash ../guard.sh > ../guard-verdict.log 2>&1); then guard_ok=1; else guard_ok=0; fi
           gh auth setup-git
-          git push origin "upstream-sync/$TAG"
+          if ! git push origin "upstream-sync/$TAG" 2> ../push.log; then
+            # Upstream commits that touch workflow files can be refused for the default token.
+            cat ../push.log >&2
+            gh issue create --title "Upstream $TAG: push of the review branch was refused" \
+              --body "The merge was clean, but GitHub refused the push (see the run log). If upstream changed workflow files, push the branch by hand with a token that has workflow scope."
+            exit 1
+          fi
           verdict="checks passed"
-          if [ "$STATUS" != "0" ]; then verdict="checks FAILED: strip new vendor paths or fix tests before merging"; fi
+          if [ "$guard_ok" != "1" ]; then
+            verdict="phone-home guard FAILED: strip new vendor paths before merging"
+          elif [ "$STATUS" != "0" ]; then
+            verdict="checks FAILED: fix tests before merging (reported by the merge job, which ran upstream code)"
+          fi
           gh pr create --base pwm --head "upstream-sync/$TAG" \
             --title "Merge upstream $TAG ($verdict)" \
-            --body-file <(printf 'Merges upstream release %s into pwm.\n\n%s\n\n' "$TAG" "$verdict"; cat sync/report.md)
+            --body-file <(printf 'Merges upstream release %s into pwm.\n\n%s\n\n## Guard, re-run by the publish job\n\n' "$TAG" "$verdict"; sed 's/^/    /' ../guard-verdict.log | tail -40; printf '\n'; cat sync/report.md)
