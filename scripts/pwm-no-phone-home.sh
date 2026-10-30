@@ -56,25 +56,29 @@ for entry in src scripts; do
   fi
 done
 
-# A tracked symlink is scanned only as its link text, so its target must itself be scanned: it has
-# to resolve inside the repository and outside the not-shipped list.
-while IFS= read -r link; do
-  [ -n "$link" ] || continue
+# A tracked symlink is scanned only as its link text, so shipped symlinks are an explicit allowlist,
+# each pinned to its exact target text. Any other shipped symlink (or a changed target) fails: path
+# resolution tricks (.., case, links to the root) cannot slip through what is never resolved.
+ALLOWED_SYMLINKS=(
+  "openclaw/skills/do/SKILL.md=../../../plugin/skills/do/SKILL.md"
+  "openclaw/skills/make-plan/SKILL.md=../../../plugin/skills/make-plan/SKILL.md"
+)
+while IFS= read -r -d '' record; do
+  case "$record" in 120000*) ;; *) continue ;; esac
+  link="${record#*$'\t'}"
   skip=0
   for entry in "${NOT_SHIPPED[@]}"; do
     case "$link" in "$entry" | "$entry"/*) skip=1 ;; esac
   done
   [ "$skip" = 1 ] && continue
-  target="$(cd "$(dirname "$link")" && pwd -P)/$(readlink "$link")"
-  resolved="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)/$(basename "$target")" || resolved=""
-  case "$resolved" in
-  "$root"/*) rel="${resolved#"$root"/}" ;;
-  *) echo "FAIL: symlink $link points outside the repository" >&2; exit 2 ;;
-  esac
-  for entry in "${NOT_SHIPPED[@]}"; do
-    case "$rel" in "$entry" | "$entry"/*) echo "FAIL: symlink $link points into $entry, which the guard does not scan" >&2; exit 2 ;; esac
-  done
-done < <(git ls-files -s | awk '$1 == "120000" { sub(/^[^\t]*\t/, ""); print }')
+  pair="$link=$(readlink "$link" 2>/dev/null || true)"
+  allowed=0
+  for ok in "${ALLOWED_SYMLINKS[@]}"; do [ "$pair" = "$ok" ] && allowed=1; done
+  if [ "$allowed" != 1 ]; then
+    echo "FAIL: shipped symlink is not on the guard's allowlist: $pair" >&2
+    exit 2
+  fi
+done < <(git ls-files -s -z)
 
 # One git grep pass; prints matches; returns 0 on matches, 1 when clean, 2+ on error.
 grep_pass() {
