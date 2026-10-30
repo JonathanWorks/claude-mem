@@ -163,7 +163,7 @@ jobs:
           title="Upstream $TAG conflicts with pwm"
           # shellcheck disable=SC2016 # the backticks are literal Markdown fences
           body="$(printf 'Merging upstream %s into pwm conflicts in:\n\n```\n%s\n```\n\nResolve by hand on a branch off pwm, then re-run the phone-home guard.' "$TAG" "$(cat sync/conflicts.txt)")"
-          existing="$(gh issue list --state open --search "in:title $TAG conflicts" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+          existing="$(gh issue list --state open --search "in:title $TAG conflicts" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1 || true)"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
@@ -186,7 +186,7 @@ jobs:
           # verdict comes from re-running the guard here (it only runs git grep over the files).
           git merge-base --is-ancestor pwm "$head"
           git merge-base --is-ancestor "$TAG" "$head"
-          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh; then
+          if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh .gitattributes; then
             echo "merged tree changes our workflows or the guard; refusing to publish" >&2
             exit 1
           fi
@@ -198,7 +198,7 @@ jobs:
             # Upstream commits that touch workflow files can be refused for the default token.
             cat ../push.log >&2
             title="Upstream $TAG: push of the review branch was refused"
-            existing="$(gh issue list --state open --search "in:title $TAG push" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+            existing="$(gh issue list --state open --search "in:title $TAG push" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1 || true)"
             if [ -z "$existing" ]; then
               gh issue create --title "$title" \
                 --body "The merge was clean, but GitHub refused the push (see the run log). If upstream changed workflow files, push the branch by hand with a token that has workflow scope."

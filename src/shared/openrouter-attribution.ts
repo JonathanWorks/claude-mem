@@ -23,7 +23,7 @@
  */
 
 /** The app's unique identifier on OpenRouter. Changing this resets the ranking. */
-export const OPENROUTER_APP_URL = 'https://github.com/thedotmack/claude-mem';
+export const OPENROUTER_APP_URL = 'https://github.com/JonathanWorks/claude-mem';
 
 /** Display name only — safe to change, does not affect ranking. */
 export const OPENROUTER_APP_TITLE = 'Claude-Mem';

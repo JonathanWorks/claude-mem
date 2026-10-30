@@ -8,7 +8,7 @@ import { replaceOwnedFiles, type OwnedFile } from '../../shared/owned-file-insta
 const PI_CAPTURE_GUIDANCE =
   'Automatic memory capture is not verified by installation or status. Pi 0.79.6 provides manual recall only. ' +
   'Capture compatibility is source-reviewed for Pi 1.0.2 and 1.0.4; other or unknown versions need a compatibility check. ' +
-  'Check your Pi version and update Pi if needed: https://github.com/thedotmack/claude-mem/blob/main/docs/pi-native-capture.md';
+  'Check your Pi version and update Pi if needed: https://github.com/JonathanWorks/claude-mem/blob/pwm/docs/pi-native-capture.md';
 
 const PI_OWNED_FILES = ['index.js', 'package.json', 'LICENSE.txt', 'CLAUDE-MEM-LICENSE.txt', 'CLAUDE-MEM-NOTICE.txt', 'TYPEBOX-LICENSE.txt', 'TYPEBOX-PROVENANCE.json'];
 

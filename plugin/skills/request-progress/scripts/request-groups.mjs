@@ -1218,7 +1218,7 @@ var init_SettingsDefaultsManager = __esm({
       static VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9-])/i;
       // Keys that hold an endpoint; only these get the plain-text host check, so a path or prompt that
       // merely mentions the vendor's name is never reset.
-      static ENDPOINT_KEY = /(URL|HOST|ORIGIN|ENDPOINT)$/;
+      static ENDPOINT_KEY = /(URLS?|HOSTS?|ORIGINS?|ENDPOINTS?)$/;
       /**
        * True when a value names a vendor host. Any value that parses as a URL (any scheme) is checked by
        * host; with `endpoint` true (an endpoint-shaped key) a bare host or malformed URL is checked as
@@ -1227,6 +1227,8 @@ var init_SettingsDefaultsManager = __esm({
       static isVendorEndpoint(value, endpoint = true) {
         const trimmed = value.trim();
         if (trimmed === "") return false;
+        const entries = trimmed.split(/[\s,]+/).filter(Boolean);
+        if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
         try {
           const host = new URL(trimmed).hostname.replace(/\.+$/, "");
           if (this.VENDOR_HOST.test(host)) return true;

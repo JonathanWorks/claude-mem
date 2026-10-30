@@ -1461,3 +1461,11 @@ describe('vendor text check is limited to endpoint keys (PWM fork)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('list-valued endpoint keys (PWM fork)', () => {
+  it('flags a vendor origin inside an allowed-origins list', () => {
+    expect(SettingsDefaultsManager.isVendorEndpoint('http://localhost:3000,https://app.cmem.ai')).toBe(true);
+    expect(SettingsDefaultsManager.isVendorEndpoint('http://localhost:3000, app.cmem.ai')).toBe(true);
+    expect(SettingsDefaultsManager.isVendorEndpoint('http://localhost:3000,http://127.0.0.1:5173')).toBe(false);
+  });
+});

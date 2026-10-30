@@ -449,7 +449,7 @@ export function makeIDETask(ideId: string, summary: InstallSummary, dshProfile?:
             return 'Pi: extension installation failed';
           }
           return 'Pi: extension files installed; automatic capture is unverified. Pi 0.79.6 provides manual recall only. ' +
-            'Check your Pi version and update Pi if needed: https://github.com/thedotmack/claude-mem/blob/main/docs/pi-native-capture.md';
+            'Check your Pi version and update Pi if needed: https://github.com/JonathanWorks/claude-mem/blob/pwm/docs/pi-native-capture.md';
         },
       };
     }

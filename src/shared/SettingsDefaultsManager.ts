@@ -711,7 +711,7 @@ export class SettingsDefaultsManager {
 
   // Keys that hold an endpoint; only these get the plain-text host check, so a path or prompt that
   // merely mentions the vendor's name is never reset.
-  private static readonly ENDPOINT_KEY = /(URL|HOST|ORIGIN|ENDPOINT)$/;
+  private static readonly ENDPOINT_KEY = /(URLS?|HOSTS?|ORIGINS?|ENDPOINTS?)$/;
 
   /**
    * True when a value names a vendor host. Any value that parses as a URL (any scheme) is checked by
@@ -721,6 +721,9 @@ export class SettingsDefaultsManager {
   static isVendorEndpoint(value: string, endpoint = true): boolean {
     const trimmed = value.trim();
     if (trimmed === '') return false;
+    // A list value (comma or whitespace separated, e.g. ALLOWED_ORIGINS) is checked entry by entry.
+    const entries = trimmed.split(/[\s,]+/).filter(Boolean);
+    if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
     try {
       const host = new URL(trimmed).hostname.replace(/\.+$/, '');
       if (this.VENDOR_HOST.test(host)) return true;

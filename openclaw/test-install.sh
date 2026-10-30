@@ -484,7 +484,7 @@ for fn in find_openclaw check_openclaw install_plugin configure_memory_slot; do
   fi
 done
 
-assert_contains "$CLAUDE_MEM_REPO" "github.com/thedotmack/claude-mem" "CLAUDE_MEM_REPO points to correct repository"
+assert_contains "$CLAUDE_MEM_REPO" "github.com/JonathanWorks/claude-mem" "CLAUDE_MEM_REPO points to correct repository"
 
 for fn in setup_ai_provider write_settings mask_api_key; do
   if declare -f "$fn" &>/dev/null; then
@@ -1982,7 +1982,7 @@ test_install_sh_has_set_euo_pipefail() {
 test_install_sh_has_set_euo_pipefail
 
 test_install_sh_has_stable_url_in_usage() {
-  if grep -q 'raw.githubusercontent.com/thedotmack/claude-mem/main/openclaw/install.sh' "$INSTALL_SCRIPT"; then
+  if grep -q 'raw.githubusercontent.com/JonathanWorks/claude-mem/pwm/openclaw/install.sh' "$INSTALL_SCRIPT"; then
     test_pass "install.sh usage comment has stable raw.githubusercontent.com URL"
   else
     test_fail "install.sh should reference stable raw.githubusercontent.com URL in usage"

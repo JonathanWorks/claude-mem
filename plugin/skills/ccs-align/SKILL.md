@@ -7,15 +7,15 @@ description: Run the CCS Align seat's hourly breathing cycle — prove the local
 
 CCS Align is a **standing seat**, not a bird's-eye planner. Its one job, once an hour: talk to the **local** claude-mem worker, pull recent needle observations through the existing three-layer disclosure ladder, and land them in a **seat-owned middle cache** using grab → append → replace.
 
-This skill implements the Phase 0 breathing slice, Phase 1 exclude marks, and Phase 2 rules alignment from the plan of record, `plans/2026-09-09-ccs-align.md`. Phases 0–2 are **shipped and merged** ([#3934](https://github.com/thedotmack/claude-mem/pull/3934), [#3935](https://github.com/thedotmack/claude-mem/pull/3935), [#3936](https://github.com/thedotmack/claude-mem/pull/3936)); Phase 3 is **verify / sign-off** (this loop) — no new product surface. It is **not** a context compiler, **not** Focus/mouth, and **not** Grok Memory Phase 2. When you speak to the human, address them as **Alex**.
+This skill implements the Phase 0 breathing slice, Phase 1 exclude marks, and Phase 2 rules alignment from the plan of record, `plans/2026-09-09-ccs-align.md`. Phases 0–2 are **shipped and merged** (upstream #3934, upstream #3935, upstream #3936); Phase 3 is **verify / sign-off** (this loop) — no new product surface. It is **not** a context compiler, **not** Focus/mouth, and **not** Grok Memory Phase 2. When you speak to the human, address them as **Alex**.
 
 ## What is implemented (Phases 0–2 shipped)
 
-- **Phase 0 — Breathing slice** ([#3934](https://github.com/thedotmack/claude-mem/pull/3934)): health check → `search` → `timeline` → `get_observations` → append records to `~/.claude-mem/ccs-align/<viewerId>/middle.jsonl` (atomic, deduped).
-- **Phase 1 — Exclude marks** ([#3935](https://github.com/thedotmack/claude-mem/pull/3935)): mark observations (and linked tool-use ids) as excluded from the compiled middle cache. "Purge" means the compiled `middle.jsonl` no longer contains the record — the diary / SQLite stay authoritative. Unmarking + rebuild restores the observation. `DELETE /api/observation/:id` is **forbidden**.
-- **Phase 2 — Rules alignment** ([#3936](https://github.com/thedotmack/claude-mem/pull/3936)): walk house → project → seat layers, detect conflicts (`SHADOW_HOUSE`, `DENY_ALLOW`, `DRIFT`, `CLOCK_HEADER`), emit an append-only `rules-report.md`. Optionally dry-run/apply `SHADOW_HOUSE` leaf patches when `CLAUDE_MEM_CCS_ALIGN_PATCH_SHADOWS=true`. Runs every 6th hour of the hourly Worker Watch cycle (D4). This is a **checklist**, not a parser — no `.cas` compiler.
+- **Phase 0 — Breathing slice** (upstream #3934): health check → `search` → `timeline` → `get_observations` → append records to `~/.claude-mem/ccs-align/<viewerId>/middle.jsonl` (atomic, deduped).
+- **Phase 1 — Exclude marks** (upstream #3935): mark observations (and linked tool-use ids) as excluded from the compiled middle cache. "Purge" means the compiled `middle.jsonl` no longer contains the record — the diary / SQLite stay authoritative. Unmarking + rebuild restores the observation. `DELETE /api/observation/:id` is **forbidden**.
+- **Phase 2 — Rules alignment** (upstream #3936): walk house → project → seat layers, detect conflicts (`SHADOW_HOUSE`, `DENY_ALLOW`, `DRIFT`, `CLOCK_HEADER`), emit an append-only `rules-report.md`. Optionally dry-run/apply `SHADOW_HOUSE` leaf patches when `CLAUDE_MEM_CCS_ALIGN_PATCH_SHADOWS=true`. Runs every 6th hour of the hourly Worker Watch cycle (D4). This is a **checklist**, not a parser — no `.cas` compiler.
 - **Phase 3 — Verify / sign-off** (this loop): re-run the regression tests and anti-pattern greps, prove the boundary (a scripted cycle dedupes, an exclude drops from the middle cache but not the diary, the rules report is produced or a MISS is recorded), and keep the skill + plan honest about what this seat is not. Phase 3 adds **no** new runtime behavior.
-- **Does not:** delete history, write `profile.md`, write LFG/Orifice `[awareness]` logs (that seam belongs to [#3931](https://github.com/thedotmack/claude-mem/pull/3931)), add a sixth `processAgentResponse` consumer, restart the worker, run a per-turn drip update, enforce Focus/mouth/standing rules, or copy house text into seats.
+- **Does not:** delete history, write `profile.md`, write LFG/Orifice `[awareness]` logs (that seam belongs to upstream #3931), add a sixth `processAgentResponse` consumer, restart the worker, run a per-turn drip update, enforce Focus/mouth/standing rules, or copy house text into seats.
 
 ## What this is NOT (honest boundary)
 
@@ -25,7 +25,7 @@ CCS Align is deliberately small. It does **not** ship, and this loop does **not*
 - **No brainbeat product.** The "regenerate awareness once per finished unit of work" door is not built. Align *pulls* on an hourly cadence; it is not a per-turn drip and it is not a brainbeat.
 - **No attention trough / curse-salience.** No salience decay, no trough scoring. Explicitly out of every phase.
 - **No Focus / mouth enforcement.** Standing rules (always / never / danger) are never enforced or decayed here. Align may *list* a conflict; egress filtering belongs to a different agent.
-- **No second writer on LFG/Orifice `[awareness]` logs.** [#3931](https://github.com/thedotmack/claude-mem/pull/3931) owns `agents/**/memory/log/YYYY-MM.md`. Align writes only its seat-owned middle cache.
+- **No second writer on LFG/Orifice `[awareness]` logs.** upstream #3931 owns `agents/**/memory/log/YYYY-MM.md`. Align writes only its seat-owned middle cache.
 - **No history rewrite.** Exclude marks filter the *compiled* cache; the diary / SQLite stay authoritative and rebuildable. No `DELETE /api/observation`, no A-MEM row rewrite.
 
 ### Ops MISS — worker plugin version lag
