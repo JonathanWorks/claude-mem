@@ -707,7 +707,7 @@ export class SettingsDefaultsManager {
   // vendor endpoint (the hosted sync hub or inference gateway). Any such URL falls back to its
   // default, so nothing is ever sent to the vendor.
   private static readonly VENDOR_HOST = /(^|\.)(cmem\.ai|claude-mem\.ai)$/i;
-  private static readonly VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9-])/i;
+  private static readonly VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9.-])/i;
 
   // Keys that hold an endpoint; only these get the plain-text host check, so a path or prompt that
   // merely mentions the vendor's name is never reset.
@@ -725,8 +725,9 @@ export class SettingsDefaultsManager {
     const entries = trimmed.split(/[\s,]+/).filter(Boolean);
     if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
     try {
-      const host = new URL(trimmed).hostname.replace(/\.+$/, '');
-      if (this.VENDOR_HOST.test(host)) return true;
+      // A value that parses as a URL is judged by its host alone (cmem.ai.evil.example is not ours
+      // to block, and is not the vendor).
+      return this.VENDOR_HOST.test(new URL(trimmed).hostname.replace(/\.+$/, ''));
     } catch {
       // Not a URL; the plain-text check below still applies to endpoint keys.
     }

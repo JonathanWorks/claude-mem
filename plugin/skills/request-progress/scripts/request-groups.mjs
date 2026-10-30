@@ -1215,7 +1215,7 @@ var init_SettingsDefaultsManager = __esm({
       // vendor endpoint (the hosted sync hub or inference gateway). Any such URL falls back to its
       // default, so nothing is ever sent to the vendor.
       static VENDOR_HOST = /(^|\.)(cmem\.ai|claude-mem\.ai)$/i;
-      static VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9-])/i;
+      static VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9.-])/i;
       // Keys that hold an endpoint; only these get the plain-text host check, so a path or prompt that
       // merely mentions the vendor's name is never reset.
       static ENDPOINT_KEY = /(URLS?|HOSTS?|ORIGINS?|ENDPOINTS?)$/;
@@ -1230,8 +1230,7 @@ var init_SettingsDefaultsManager = __esm({
         const entries = trimmed.split(/[\s,]+/).filter(Boolean);
         if (entries.length > 1) return entries.some((entry) => this.isVendorEndpoint(entry, endpoint));
         try {
-          const host = new URL(trimmed).hostname.replace(/\.+$/, "");
-          if (this.VENDOR_HOST.test(host)) return true;
+          return this.VENDOR_HOST.test(new URL(trimmed).hostname.replace(/\.+$/, ""));
         } catch {
         }
         if (!endpoint) return false;

@@ -1469,3 +1469,10 @@ describe('list-valued endpoint keys (PWM fork)', () => {
     expect(SettingsDefaultsManager.isVendorEndpoint('http://localhost:3000,http://127.0.0.1:5173')).toBe(false);
   });
 });
+
+describe('a parsed URL is judged by its host (PWM fork)', () => {
+  it('keeps a lookalike host that only starts with the vendor name', () => {
+    expect(SettingsDefaultsManager.isVendorEndpoint('https://cmem.ai.evil.example/v1')).toBe(false);
+    expect(SettingsDefaultsManager.isVendorEndpoint('https://api.cmem.ai./v1')).toBe(true);
+  });
+});
