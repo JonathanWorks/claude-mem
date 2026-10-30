@@ -42,26 +42,37 @@ files_list="$(node -e '
 const path = require("path");
 const p = require("./package.json");
 if (!Array.isArray(p.files) || p.files.length === 0) process.exit(3);
-const out = new Set(["package.json", ...p.files]);
+const bad = (why, v) => { console.error("unsafe package.json value (" + why + "): " + JSON.stringify(v)); process.exit(4); };
+// One rule for files entries and main/bin/exports targets: a plain relative path inside the repo.
+const clean = (v, globs) => {
+  if (typeof v !== "string") bad("not a string", v);
+  if (/[\u0000-\u001f\u007f]/.test(v)) bad("control character", v);
+  let u = v.replace(/\/\*$/, "");
+  // A files glob ships whatever it matches, so scan its whole parent directory (a superset).
+  if (globs && /[*?\[\]{}!]/.test(u)) u = path.posix.dirname(u.slice(0, u.search(/[*?\[\]{}!]/)) + "x");
+  if (/[*?\[\]{}!]/.test(u)) bad("glob character", v);
+  const t = path.posix.normalize(u).replace(/^\.\//, "").replace(/\/$/, "");
+  if (t.startsWith(":") || t.startsWith("/") || t === ".." || t.startsWith("../") || t.includes("/../")) bad("outside the repository", v);
+  return t;
+};
+const out = new Set(["package.json"]);
+for (const f of p.files) {
+  const t = clean(f, true);
+  if (t !== "." && t !== "dist" && !t.startsWith("dist/")) out.add(t);
+}
 const add = (v) => {
-  if (typeof v === "string") {
-    const t = path.posix.normalize(v.replace(/\*.*$/, "")).replace(/^\.\//, "").replace(/\/$/, "");
-    if (t.startsWith(":") || t.startsWith("/") || t === ".." || t.startsWith("../") || t.includes("/../")) {
-      console.error("unsafe package.json target: " + v); process.exit(4);
-    }
-    out.add(t);
-  } else if (v && typeof v === "object") Object.values(v).forEach(add);
+  if (typeof v === "string") { const t = clean(v); if (t !== "." && t !== "dist" && !t.startsWith("dist/")) out.add(t); }
+  else if (v && typeof v === "object") Object.values(v).forEach(add);
 };
 add(p.main); add(p.bin); add(p.exports);
-for (const e of out) {
-  if (e.startsWith(":") || e.startsWith("/")) { console.error("unsafe files entry: " + e); process.exit(4); }
-  if (e && e !== "." && e !== "dist" && !e.startsWith("dist/")) console.log(e);
-}
+for (const e of out) console.log(e);
 ')" ||
   { echo "FAIL: could not read package.json \"files\"" >&2; exit 2; }
 while IFS= read -r entry; do
   [ -n "$entry" ] && [ "$entry" != "dist" ] && SHIPPED+=("$entry")
 done <<<"$files_list"
+# dist/ is build output from src/ (the SOURCE tier). Anything committed under it is scanned as shipped.
+if [ -n "$(git ls-files -- dist | head -1)" ]; then SHIPPED+=(dist); fi
 
 SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack\.github\.io|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
 SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|/gh/thedotmack|thedotmack\.github\.io|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
