@@ -183,22 +183,26 @@ jobs:
           head="refs/heads/upstream-sync/$TAG"
           # The bundle was built by a job that ran upstream code, so nothing in it is trusted: it must
           # descend from both pwm and the release, must not touch our workflows or the guard, and the
-          # verdict comes from re-running the guard here (the guard only reads files with rg).
+          # verdict comes from re-running the guard here (it only runs git grep over the files).
           git merge-base --is-ancestor pwm "$head"
           git merge-base --is-ancestor "$TAG" "$head"
           if ! git diff --quiet pwm "$head" -- .github/workflows scripts/pwm-no-phone-home.sh; then
             echo "merged tree changes our workflows or the guard; refusing to publish" >&2
             exit 1
           fi
-          cp scripts/pwm-no-phone-home.sh ../guard.sh
+          # The diff check above proves the merged tree's guard is byte-identical to ours.
           git worktree add --quiet --detach ../merged "$head"
-          if (cd ../merged && bash ../guard.sh > ../guard-verdict.log 2>&1); then guard_ok=1; else guard_ok=0; fi
+          if (cd ../merged && bash scripts/pwm-no-phone-home.sh > ../guard-verdict.log 2>&1); then guard_ok=1; else guard_ok=0; fi
           gh auth setup-git
           if ! git push origin "upstream-sync/$TAG" 2> ../push.log; then
             # Upstream commits that touch workflow files can be refused for the default token.
             cat ../push.log >&2
-            gh issue create --title "Upstream $TAG: push of the review branch was refused" \
-              --body "The merge was clean, but GitHub refused the push (see the run log). If upstream changed workflow files, push the branch by hand with a token that has workflow scope."
+            title="Upstream $TAG: push of the review branch was refused"
+            existing="$(gh issue list --state open --search "in:title $TAG push" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+            if [ -z "$existing" ]; then
+              gh issue create --title "$title" \
+                --body "The merge was clean, but GitHub refused the push (see the run log). If upstream changed workflow files, push the branch by hand with a token that has workflow scope."
+            fi
             exit 1
           fi
           verdict="checks passed"

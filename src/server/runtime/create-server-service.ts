@@ -27,6 +27,7 @@ import { OpenRouterObservationProvider } from '../generation/providers/OpenRoute
 import { parseOpenRouterExtraBody } from '../../shared/openrouter-extra-body.js';
 import { keysForEndpoint } from '../../shared/cmem-gateway.js';
 import { resolveOpenRouterChatCompletionsUrl } from '../../shared/openrouter-base-url.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { buildServerGenerationPrompt } from '../generation/providers/shared/prompt-builder.js';
 import type { ServerGenerationProvider } from '../generation/providers/shared/types.js';
 import { ServerService } from './ServerService.js';
@@ -451,7 +452,9 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     // started from a shell inherits that shell's ANTHROPIC_BASE_URL and
     // ANTHROPIC_CUSTOM_HEADERS (sanitizeEnv keeps them), which point Claude
     // Code at its own gateway and would carry this key there (#2375).
-    const baseUrl = process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL;
+    const rawAnthropicBaseUrl = process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL;
+    // PWM fork: a vendor endpoint from the environment is never used.
+    const baseUrl = rawAnthropicBaseUrl && SettingsDefaultsManager.isVendorEndpoint(rawAnthropicBaseUrl) ? undefined : rawAnthropicBaseUrl;
     // The shared cmem key lock, checked against the URL the key is sent to: a
     // cm_pro_ account key never goes to api.anthropic.com or a third-party gateway.
     const [apiKey] = keysForEndpoint(resolveAnthropicMessagesUrl(baseUrl), configuredKey ? [configuredKey] : []);
@@ -488,7 +491,8 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
   if (provider === 'openrouter') {
     const configuredKey = process.env.OPENROUTER_API_KEY ?? process.env.CLAUDE_MEM_OPENROUTER_API_KEY ?? '';
     // #2382/#2590/#2622/#2393 — optional OpenAI-compatible base URL.
-    const baseUrl = process.env.CLAUDE_MEM_OPENROUTER_BASE_URL ?? process.env.OPENROUTER_BASE_URL;
+    const rawOpenRouterBaseUrl = process.env.CLAUDE_MEM_OPENROUTER_BASE_URL ?? process.env.OPENROUTER_BASE_URL;
+    const baseUrl = rawOpenRouterBaseUrl && SettingsDefaultsManager.isVendorEndpoint(rawOpenRouterBaseUrl) ? undefined : rawOpenRouterBaseUrl;
     // The shared cmem key lock: a cm_pro_ key only with the gateway, and the
     // gateway only with a cm_pro_ key.
     const [apiKey] = keysForEndpoint(resolveOpenRouterChatCompletionsUrl(baseUrl), configuredKey ? [configuredKey] : []);

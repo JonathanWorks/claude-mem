@@ -334,12 +334,12 @@ describe('Plugin Distribution - Cursor Marketplace', () => {
     expect(hooks.hooks.stop[0].command).toContain('npx -y claude-mem hook cursor summarize');
   });
 
-  it('ships the shared local and remote MCP definitions for both plugins', () => {
+  // PWM fork: the hosted remote MCP server is removed; only the local definition ships.
+  it('ships only the local MCP definition for both plugins', () => {
     for (const relativePath of ['claude-mem-cursor/mcp.json', 'claude-mem-grok-bot/mcp.json']) {
       const mcp = readJson(relativePath);
       expect(mcp.mcpServers['claude-mem-local'].args).toEqual(['-y', 'claude-mem', 'mcp']);
-      const expected = 'Bearer ' + '${' + 'CLAUDE_MEM_MCP_TOKEN' + '}';
-      expect(mcp.mcpServers['claude-mem-remote'].headers.Authorization).toBe(expected);
+      expect(Object.keys(mcp.mcpServers)).toEqual(['claude-mem-local']);
     }
   });
 });

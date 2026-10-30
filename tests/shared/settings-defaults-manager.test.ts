@@ -1449,3 +1449,15 @@ describe('SettingsDefaultsManager.isVendorEndpoint (PWM fork)', () => {
     }
   });
 });
+
+describe('vendor text check is limited to endpoint keys (PWM fork)', () => {
+  it('keeps a data dir or prompt that only mentions the vendor name', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pwm-vendor-text-'));
+    const path = join(dir, 'settings.json');
+    writeFileSync(path, JSON.stringify({ CLAUDE_MEM_DATA_DIR: '/Users/jon/cmem.ai/notes', CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'sync.cmem.ai' }));
+    const loaded = SettingsDefaultsManager.loadFromFile(path, false, { readOnly: true });
+    expect(loaded.CLAUDE_MEM_DATA_DIR).toBe('/Users/jon/cmem.ai/notes');
+    expect(loaded.CLAUDE_MEM_CLOUD_SYNC_HUB_URL).toBe(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_CLOUD_SYNC_HUB_URL);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

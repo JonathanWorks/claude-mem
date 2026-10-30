@@ -688,7 +688,7 @@ export class SettingsDefaultsManager {
 
   static get(key: keyof SettingsDefaults): string {
     const raw = process.env[key] ?? this.DEFAULTS[key];
-    const value = typeof raw === 'string' && this.isVendorEndpoint(raw) ? this.DEFAULTS[key] : raw;
+    const value = typeof raw === 'string' && this.isVendorEndpoint(raw, this.ENDPOINT_KEY.test(key)) ? this.DEFAULTS[key] : raw;
     if (key === 'CLAUDE_MEM_WORKER_HOST') {
       return this.normalizeWorkerHost(value);
     }
@@ -709,16 +709,25 @@ export class SettingsDefaultsManager {
   private static readonly VENDOR_HOST = /(^|\.)(cmem\.ai|claude-mem\.ai)$/i;
   private static readonly VENDOR_TEXT = /(^|[^a-z0-9-])(cmem|claude-mem)\.ai\.?(?![a-z0-9-])/i;
 
-  /** True when a settings value names a vendor host, by URL parse (any scheme) or by plain text. */
-  static isVendorEndpoint(value: string): boolean {
+  // Keys that hold an endpoint; only these get the plain-text host check, so a path or prompt that
+  // merely mentions the vendor's name is never reset.
+  private static readonly ENDPOINT_KEY = /(URL|HOST|ORIGIN|ENDPOINT)$/;
+
+  /**
+   * True when a value names a vendor host. Any value that parses as a URL (any scheme) is checked by
+   * host; with `endpoint` true (an endpoint-shaped key) a bare host or malformed URL is checked as
+   * text too.
+   */
+  static isVendorEndpoint(value: string, endpoint = true): boolean {
     const trimmed = value.trim();
     if (trimmed === '') return false;
     try {
       const host = new URL(trimmed).hostname.replace(/\.+$/, '');
       if (this.VENDOR_HOST.test(host)) return true;
     } catch {
-      // Not a URL; the plain-text check below still applies.
+      // Not a URL; the plain-text check below still applies to endpoint keys.
     }
+    if (!endpoint) return false;
     let decoded = trimmed;
     try {
       decoded = decodeURIComponent(trimmed);
@@ -731,7 +740,7 @@ export class SettingsDefaultsManager {
   private static dropVendorEndpoints(settings: SettingsDefaults): void {
     for (const key of Object.keys(settings) as Array<keyof SettingsDefaults>) {
       const value = settings[key];
-      if (typeof value !== 'string' || !this.isVendorEndpoint(value)) continue;
+      if (typeof value !== 'string' || !this.isVendorEndpoint(value, this.ENDPOINT_KEY.test(key))) continue;
       console.warn(`[SETTINGS] ${key} named a vendor host; using the default instead`);
       settings[key] = this.DEFAULTS[key];
     }
