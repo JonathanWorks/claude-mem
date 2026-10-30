@@ -41,10 +41,10 @@ while IFS= read -r entry; do
 done <<<"$files_list"
 
 SHIPPED_PATTERN='(cmem|claude-mem)\.ai|posthog|cmem[ -]?pro([^a-z0-9]|$)|cmem[ -]?cloud|teambrain|free trial|pro[-_ ]trial|PRO_TRIAL|buymeacoffee|patreon\.com|thedotmack/claude-mem\.git|(github|githubusercontent|codeload\.github)\.com/thedotmack|api\.github\.com/repos/thedotmack'
-SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
+SOURCE_PATTERN='(cmem|claude-mem)\.ai|posthog|[a-z]+://[^[:space:]"'"'"'`]*thedotmack/claude-mem|/gh/thedotmack|github\.com[:/]thedotmack|githubusercontent\.com/thedotmack|repos/thedotmack|github:thedotmack|repo["'"'"'`]?[[:space:]]*:[[:space:]]*["'"'"'`]thedotmack/claude-mem'
 # Not code that ships: npm lockfile funding metadata and upstream's changelog of past releases.
 EXCLUDES=(':(exclude,glob)**/package-lock.json' ':(exclude)CHANGELOG.md')
-SOURCE_EXCLUDES=(':(exclude,glob)**/*.test.ts' ':(exclude,glob)**/*.test.tsx' ':(exclude,glob)**/__tests__/**')
+SOURCE_EXCLUDES=(':(exclude,glob)**/*.test.ts' ':(exclude,glob)**/*.test.tsx')
 
 for entry in "${SHIPPED[@]}" src; do
   if [ -z "$(git ls-files -- "$entry" | head -1)" ]; then
