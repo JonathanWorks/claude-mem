@@ -86,3 +86,12 @@ describe("log-only projection under concurrent pushes", () => {
 		expect(status.projected_seq).toBe("320");
 	});
 });
+
+describe("hub status advertises content kinds (PWM fork)", () => {
+	it("lists every kind the hub accepts, including work_state", async () => {
+		const userId = `user-${crypto.randomUUID()}`;
+		const app = await startLogOnlyHub(userId);
+		const status = await (await fetch(`${app.url}/v1/sync/status`, { headers: headers(userId, "dev-a") })).json() as { content_kinds: string[] };
+		expect(status.content_kinds).toEqual(["observation", "summary", "prompt", "work_state"]);
+	});
+});

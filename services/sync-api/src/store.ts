@@ -18,6 +18,7 @@ import type postgres from "postgres";
 import {
 	assertCanonicalDecimal,
 	compareCanonicalDecimals,
+	CONTENT_KIND_NAMES,
 	decimalMin,
 	incrementCanonicalDecimal,
 	newEpoch,
@@ -91,6 +92,8 @@ export interface StatusResult {
 	projected_seq: string;
 	op_count: number;
 	device_count: number;
+	/** Content kinds this hub accepts; clients push a kind only once it is listed. */
+	content_kinds: string[];
 }
 
 export interface DeviceMetadata {
@@ -607,6 +610,8 @@ export class HubStore {
 			projected_seq: status.projected_seq,
 			op_count: Number(status.head_seq),
 			device_count: status.device_count,
+			// PWM fork: clients push a kind only once the hub advertises it (work_state included).
+			content_kinds: [...CONTENT_KIND_NAMES],
 		};
 	}
 
