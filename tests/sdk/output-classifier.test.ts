@@ -315,6 +315,28 @@ describe('isTransportFailureObserverOutput (#3752)', () => {
     )).toBe(true);
   });
 
+  it('classifies a TLS trust failure whose remedy text is a clause', () => {
+    // The CLI's own text, seen on a worker without NODE_EXTRA_CA_CERTS. Its
+    // remedy sentences contain "is", so the detail reads as a clause; the
+    // failure must still be recognised or the batch is dropped as prose.
+    expect(isTransportFailureObserverOutput(
+      'API Error: Unable to connect to API: SSL certificate verification failed ' +
+      '(UNABLE_TO_GET_ISSUER_CERT_LOCALLY). The certificates the server sent don\'t lead to a ' +
+      'trusted authority. If the server leaves out an intermediate certificate, which browsers ' +
+      'fetch by themselves, whoever runs it must have it send its full chain. If it is a ' +
+      'TLS-inspecting corporate proxy or a gateway signed by a private CA, set NODE_EXTRA_CA_CERTS.'
+    )).toBe(true);
+    expect(isTransportFailureObserverOutput(
+      'API Error: self-signed certificate in certificate chain (SELF_SIGNED_CERT_IN_CHAIN). It is not trusted.'
+    )).toBe(true);
+  });
+
+  it('keeps prose about certificates as prose', () => {
+    expect(isTransportFailureObserverOutput(
+      'API error handling for certificate rotation was reviewed; the TLS path is already covered.'
+    )).toBe(false);
+  });
+
   it('classifies the common transport surfaces', () => {
     expect(isTransportFailureObserverOutput('connect ECONNREFUSED 127.0.0.1:443')).toBe(true);
     expect(isTransportFailureObserverOutput('getaddrinfo ENOTFOUND api.anthropic.com')).toBe(true);
