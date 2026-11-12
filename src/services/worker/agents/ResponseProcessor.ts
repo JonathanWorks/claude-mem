@@ -19,7 +19,7 @@ import { notifyGrokBotBrainbeat } from '../../integrations/GrokBotBrainbeat.js';
 import { notifyGrokBotIndex } from '../../integrations/GrokBotIndexWriter.js';
 import { updateFolderClaudeMdFiles } from '../../../utils/claude-md-utils.js';
 import { getWorkerPort } from '../../../shared/worker-utils.js';
-import { recordObserverFailure, recordObserverSuccess } from '../../../shared/observer-health.js';
+import { recordObserverFailure, recordObserverSuccess, TRANSPORT_UNREACHABLE_KIND } from '../../../shared/observer-health.js';
 import { clearQuotaCooldown, routeAroundUnservableProviderIfLoaded } from '../../../shared/quota-cooldown.js';
 import { recycleObserverConversation } from '../session/recycle-conversation.js';
 import { clearRejectedOutput, recordRejectedOutput } from '../session/OutputRecovery.js';
@@ -545,6 +545,13 @@ export async function processAgentResponse(
         sessionId: session.sessionDbId,
         outputClass: 'transport',
         preview: previewOutput(text),
+      });
+      // This path neither throws nor stores, so nothing else books it. Without
+      // the ledger entry the session-start warning is silent for the whole
+      // outage (grokr, 2026-11-10: 17 hours of EHOSTUNREACH and no banner).
+      recordObserverFailure(providerName, {
+        message: `The observer could not reach its provider: ${previewOutput(text)}`,
+        kind: TRANSPORT_UNREACHABLE_KIND,
       });
       return null;
     }

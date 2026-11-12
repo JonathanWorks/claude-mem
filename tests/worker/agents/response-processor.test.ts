@@ -962,6 +962,34 @@ describe('ResponseProcessor', () => {
       );
     });
 
+    // An unreachable provider never throws and never stores, so without a
+    // ledger entry the session-start warning stays silent for the whole outage.
+    it('books an unreachable provider in the observer-health ledger', async () => {
+      mockSessionManager = {
+        getMessageIterator: async function* () { yield* []; },
+        getPendingMessageStore: () => ({ confirmProcessed: mock(() => {}) }),
+        confirmClaimedMessages: mock(() => Promise.resolve(0)),
+        resetProcessingToPending: mock(() => Promise.resolve(0)),
+      } as unknown as SessionManager;
+      const before = readObserverHealth()?.consecutiveFailures ?? 0;
+
+      await processAgentResponse(
+        'API Error: No internet route — check your connection or VPN (EHOSTUNREACH)',
+        createMockSession(),
+        mockDbManager,
+        mockSessionManager,
+        mockWorker,
+        100,
+        null,
+        'TestAgent'
+      );
+
+      const health = readObserverHealth();
+      expect(health?.consecutiveFailures).toBe(before + 1);
+      expect(health?.lastErrorKind).toBe('transport_unreachable');
+      expect(health?.lastErrorMessage).toContain('EHOSTUNREACH');
+    });
+
     it('still confirms ordinary prose so low-signal batches do not loop', async () => {
       const confirmClaimedMessages = mock(() => Promise.resolve(0));
       const resetProcessingToPending = mock(() => Promise.resolve(0));

@@ -437,6 +437,17 @@ export function isAuthFailure(state: ObserverHealthState): boolean {
  * True when the current outage is setup the user has to fix: a missing CLI or
  * login, a model or effort the provider does not serve, a CLI too old for it.
  */
+/**
+ * The observer's child process could not reach its provider at all (no route,
+ * refused connection, untrusted certificate). The batch is kept and retried on
+ * a backoff, so nothing is wedged for a restart to clear.
+ */
+export const TRANSPORT_UNREACHABLE_KIND = 'transport_unreachable';
+
+export function isTransportFailure(state: ObserverHealthState): boolean {
+  return state.lastErrorKind === TRANSPORT_UNREACHABLE_KIND;
+}
+
 export function isSetupFailure(state: ObserverHealthState): boolean {
   return state.lastErrorKind === 'setup_required';
 }
@@ -782,6 +793,28 @@ export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: n
         "Check the observer provider's API key in ~/.claude-mem/settings.json, or switch the",
         'observer to another provider there.',
       ]),
+      '',
+      '(Assistant: tell the user about this outage at the very start of your first reply,',
+      'quoting the error above. Do NOT restart the worker and do NOT suggest restarting it.)',
+    ].join('\n');
+  }
+
+  // An unreachable provider is a network or address fault outside the worker.
+  // The worker keeps the queued work in memory and retries by itself; a restart
+  // dials the same address and drops that queue.
+  if (isTransportFailure(state)) {
+    return [
+      "⚠️ Heads up: claude-mem can't save memories right now.",
+      '',
+      `The memory observer cannot reach its provider (${provider}); ${count} attempt${count === 1 ? '' : 's'} failed in a row ${sinceText}.`,
+      '',
+      ...renderFailureDetailLines(state, action),
+      '',
+      'Queued work is kept and retried automatically once the provider is reachable.',
+      '',
+      'Restarting will NOT help here: a restart dials the same address and drops the queued work.',
+      'Check the network path to the provider, and the base URL in ~/.claude-mem/.env',
+      '(the worker reads that file again for every observer run, so a corrected URL needs no restart).',
       '',
       '(Assistant: tell the user about this outage at the very start of your first reply,',
       'quoting the error above. Do NOT restart the worker and do NOT suggest restarting it.)',
