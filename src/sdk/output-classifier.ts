@@ -362,7 +362,7 @@ const DETAIL_IS_A_CLAUSE = /\b(?:is|are|was|were|be|been|being|has|have|had)\b/;
  * they cannot re-admit a clause this detector has already judged to be prose.
  */
 const CONCRETE_FAILURE =
-  /\b(?:econnrefused|econnreset|etimedout|enotfound|enetunreach|ehostunreach|epipe|econnaborted|eai_again|eproto|unreachable|refused|timed out)\b|\bfetch failed\b|\bsocket hang up\b|\breset by peer\b/;
+  /\b(?:econnrefused|econnreset|etimedout|enotfound|enetunreach|ehostunreach|epipe|econnaborted|eai_again|eproto|unreachable|refused|timed out)\b|\bfetch failed\b|\bsocket hang up\b|\breset by peer\b|\bunable to connect\b|\bcertificate verification failed\b|\b(?:unable_to_get_issuer_cert(?:_locally)?|unable_to_verify_leaf_signature|self_signed_cert_in_chain|depth_zero_self_signed_cert|cert_has_expired|cert_untrusted|err_tls_cert_altname_invalid)\b/;
 
 /**
  * Whether an envelope at the head of `text` is *reporting* a failure.

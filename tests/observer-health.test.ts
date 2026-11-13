@@ -23,6 +23,7 @@ import {
   scrubErrorMessage,
   OBSERVER_UNHEALTHY_FAILURE_THRESHOLD,
   type ObserverHealthState,
+  isTransportFailure,
 } from '../src/shared/observer-health.ts';
 import { QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS } from '../src/shared/quota-cooldown.ts';
 import { credentialProfileKey } from '../src/shared/EnvManager.ts';
@@ -668,6 +669,28 @@ describe('renderObserverHealthWarning', () => {
     }));
     expect(warning).toContain('What to do:');
     expect(warning).not.toContain('SUPERSECRETACTION');
+  });
+
+  it('tells an unreachable provider apart: queued work is kept, and no restart is offered', () => {
+    const unreachable = unhealthyState({
+      consecutiveFailures: 3,
+      lastErrorKind: 'transport_unreachable',
+      lastErrorProvider: 'claude',
+      lastErrorMessage: 'The observer could not reach its provider: API Error: No internet route (EHOSTUNREACH)',
+    });
+
+    expect(isTransportFailure(unreachable)).toBe(true);
+    // Still a threshold failure: one blip does not warn.
+    expect(isObserverUnhealthy({ ...unreachable, consecutiveFailures: 1 })).toBe(false);
+
+    const warning = renderObserverHealthWarning(unreachable);
+    expect(warning).toContain('cannot reach its provider');
+    expect(warning).toContain('EHOSTUNREACH');
+    expect(warning).toContain('~/.claude-mem/.env');
+    // A restart reaches the same unreachable address and drops queued work.
+    expect(warning).not.toContain(workerRestartUrl());
+    expect(warning).not.toContain('npx claude-mem restart');
+    expect(warning).toContain('Do NOT restart the worker');
   });
 
   it('relays a refused credential with the provider\'s remedy, and never offers a restart', () => {
