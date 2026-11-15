@@ -30,6 +30,8 @@ function makeManager(): SessionManager {
     getSessionStore: () => ({
       getPromptNumberFromUserPrompts: () => 1,
       getLatestPromptTextFromUserPrompts: () => null,
+      takeOwedToolUses: () => ({ rows: [], parked: 0 }),
+      settleToolUseSummaries: () => 0,
     }),
   } as unknown as DatabaseManager;
   return new SessionManager(dbManager);

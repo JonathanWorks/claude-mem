@@ -241,6 +241,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH: string;  
   CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION: string;
   CLAUDE_MEM_CODEX_SUBAGENT_INGESTION: string;
+  CLAUDE_MEM_SUMMARY_BACKLOG_SESSIONS: string;
   CLAUDE_MEM_MAX_CONCURRENT_AGENTS: string;  
   CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS: string;
   CLAUDE_MEM_OBSERVER_THINKING: string;  // Observer thinking param: 'disabled' | 'adaptive' | 'enabled[:budget]' | 'omit' (#4732)
@@ -512,6 +513,7 @@ export class SettingsDefaultsManager {
     // calls are new observer spend (the gateway allowance, or the user's own
     // plan), so capture is opt-in (Wave 3 gate R4-5).
     CLAUDE_MEM_CODEX_SUBAGENT_INGESTION: 'false',
+    CLAUDE_MEM_SUMMARY_BACKLOG_SESSIONS: '1', // Sessions replayed at a time from tool uses a stopped worker left unsummarized (0 = off)
     CLAUDE_MEM_MAX_CONCURRENT_AGENTS: '2',  // Max concurrent Claude SDK agent subprocesses
     CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS: '400000',  // Retire an observer conversation past this size and start a fresh generation (#3800)
     CLAUDE_MEM_OBSERVER_THINKING: 'disabled',  // Observer thinking param: 'disabled' (shipped) | 'adaptive' | 'enabled[:budget]' | 'omit' — an always-thinking gateway upstream rejects 'disabled' with 400/1210 (#4732)

@@ -27,6 +27,11 @@ import {
   getToolUsesByIds as getToolUsesByIdsRows,
   queryToolUses as queryToolUsesRows,
   countToolUses as countToolUsesRows,
+  settleToolUseSummaries as settleToolUseSummaryRows,
+  listSessionsOwedSummaries as listSessionsOwedSummaryRows,
+  countOwedToolUseSummaries as countOwedToolUseSummaryRows,
+  takeOwedToolUses as takeOwedToolUseRows,
+  type OwedToolUseSession,
   type ToolUseRow,
   type UpsertToolUseInput,
   type ToolUseQueryFilters,
@@ -3175,6 +3180,22 @@ export class SessionStore {
     return upsertToolUseRow(this.db, input);
   }
 
+  settleToolUseSummaries(params: { sessionDbId: number; toolUseIds: string[]; state: 'done' | 'parked' }): number {
+    return settleToolUseSummaryRows(this.db, params);
+  }
+
+  listSessionsOwedSummaries(limit: number): OwedToolUseSession[] {
+    return listSessionsOwedSummaryRows(this.db, limit);
+  }
+
+  countOwedToolUseSummaries(): number {
+    return countOwedToolUseSummaryRows(this.db);
+  }
+
+  takeOwedToolUses(sessionDbId: number, heldToolUseIds: ReadonlySet<string>): { rows: ToolUseRow[]; parked: number } {
+    return takeOwedToolUseRows(this.db, { sessionDbId, heldToolUseIds });
+  }
+
   linkToolUsesToObservation(params: {
     contentSessionId: string;
     toolUseIds: string[];
@@ -4073,7 +4094,15 @@ export class SessionStore {
     discoveryTokens: number = 0,
     overrideTimestampEpoch?: number,
     generatedByModel?: string,
-    options: { skipTitleDedup?: boolean } = {}
+    options: {
+      skipTitleDedup?: boolean;
+      /**
+       * Tool uses this batch answered. Their ledger entries close in the same
+       * transaction as the store, so a crash cannot leave a stored batch owed
+       * (it would replay as duplicate observations) or a lost one settled.
+       */
+      settleToolUses?: { sessionDbId: number; toolUseIds: string[] };
+    } = {}
   ): {
     observationIds: number[];
     /** Parallel to observationIds: true where a Tier-0 merge reused an existing row (nothing new was stored). */
@@ -4237,6 +4266,10 @@ export class SessionStore {
           timestampEpoch
         );
         summaryId = Number(result.lastInsertRowid);
+      }
+
+      if (options.settleToolUses) {
+        settleToolUseSummaryRows(this.db, { ...options.settleToolUses, state: 'done', nowEpoch: timestampEpoch });
       }
 
       return { observationIds, mergedIntoExisting, insertedObservationIds, summaryId, createdAtEpoch: timestampEpoch };

@@ -325,6 +325,9 @@ export async function ingestObservation(payload: ObservationPayload, handoff: In
         agentId: typeof payload.agentId === 'string' ? payload.agentId : null,
         orGenerationId: typeof payload.orGenerationId === 'string' ? payload.orGenerationId : null,
         orSessionId: typeof payload.orSessionId === 'string' ? payload.orSessionId : null,
+        // The summary ledger: owed until the observer answers it, unless the
+        // early return below keeps it out of the queue.
+        summaryOwed: !isExplicitMemoryWrite(payload.toolName),
       });
     } catch (error) {
       logger.warn('INGEST', 'tool_uses backup write failed (observation still queued)', {

@@ -759,6 +759,12 @@ export async function processAgentResponse(
     agent_id: context.pendingAgentId
   }));
 
+  const claimedToolUseIds = Array.from(new Set(
+    claimedMessages
+      .map(message => message.toolUseId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  ));
+
   let result: ReturnType<typeof sessionStore.storeObservations>;
   try {
     result = sessionStore.storeObservations(
@@ -769,7 +775,9 @@ export async function processAgentResponse(
       context.promptNumber,
       discoveryTokens,
       originalTimestamp ?? undefined,
-      modelId
+      modelId,
+      // The batch's tool uses leave the summary ledger with the store itself.
+      { settleToolUses: { sessionDbId: session.sessionDbId, toolUseIds: claimedToolUseIds } }
     );
   } finally {
     session.pendingAgentId = null;
@@ -809,11 +817,6 @@ export async function processAgentResponse(
   // per-call join stays (content_session_id, tool_use_id).
   //
   // Never fatal: a failed link costs a back-reference, not an observation.
-  const claimedToolUseIds = Array.from(new Set(
-    claimedMessages
-      .map(message => message.toolUseId)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0)
-  ));
   const linkObservationId = firstStoredObservationId(result);
   if (claimedToolUseIds.length > 0 && linkObservationId !== undefined) {
     try {

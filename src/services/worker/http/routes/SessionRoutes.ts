@@ -214,6 +214,27 @@ export class SessionRoutes extends BaseRouteHandler {
     return sessionIds.length;
   }
 
+  /**
+   * Bring sessions with tool uses a dead worker left owed back into the
+   * buffer, so the next resume starts them. The periodic tick calls this
+   * before resumePendingSessions, which itself never reads the database.
+   * Never fatal: a ledger that cannot be read must not stop that resume.
+   */
+  public admitSummaryBacklog(): void {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const maxSessions = Number.parseInt(settings.CLAUDE_MEM_SUMMARY_BACKLOG_SESSIONS, 10);
+    if (!Number.isFinite(maxSessions) || maxSessions <= 0) return;
+    try {
+      const admitted = this.sessionManager.admitOwedSessions(maxSessions);
+      if (admitted.length > 0) {
+        logger.info('SESSION', 'Admitted sessions from the summary ledger backlog', { sessionIds: admitted });
+      }
+    } catch (error) {
+      logger.warn('SESSION', 'Could not admit sessions from the summary ledger backlog', {},
+        error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   public ensureGeneratorRunning(sessionDbId: number, source: string): Promise<void> {
     const priorTail = this.ensureGeneratorLocks.get(sessionDbId) ?? Promise.resolve();
     // .catch(() => {}) on the PRIOR tail only: one call's rejection must

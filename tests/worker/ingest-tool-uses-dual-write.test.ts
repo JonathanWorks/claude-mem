@@ -71,6 +71,8 @@ describe('ingestObservation dual-write to tool_uses', () => {
     expect(JSON.parse(rows[0].tool_response!)).toEqual({ ok: true });
     expect(rows[0].session_db_id).toBe(queued[0].sessionDbId);
     expect(rows[0].observation_id).toBeNull();
+    // Queued for the observer, so the summary ledger holds it as owed.
+    expect(store!.countOwedToolUseSummaries()).toBe(1);
   });
 
   it('does not duplicate on replay of the same tool_use_id', async () => {
@@ -134,6 +136,8 @@ describe('ingestObservation dual-write to tool_uses', () => {
     }
     expect(generator).not.toHaveBeenCalled();
     expect(store!.queryToolUses({})).toHaveLength(2);
+    // Never queued, so nothing is owed: a restart must not replay them.
+    expect(store!.countOwedToolUseSummaries()).toBe(0);
     expect(store!.db.prepare('SELECT count(*) AS n FROM observations').get()).toEqual({ n: 0 });
   });
 

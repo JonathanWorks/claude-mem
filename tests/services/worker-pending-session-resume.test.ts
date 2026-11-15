@@ -24,7 +24,7 @@ function fixture() {
     return timer;
   }) as any);
   const clear = spyOn(globalThis, 'clearInterval').mockImplementation(() => {});
-  const routes = { resumePendingSessions: mock(() => 2) };
+  const routes = { admitSummaryBacklog: mock(() => {}), resumePendingSessions: mock(() => 2) };
   return { worker, timer, interval, clear, routes, tick: () => tick() };
 }
 
@@ -44,6 +44,7 @@ describe('WorkerService pending session resume timer', () => {
     worker.isShuttingDown = true;
     tick();
     expect(routes.resumePendingSessions).toHaveBeenCalledTimes(1);
+    expect(routes.admitSummaryBacklog).toHaveBeenCalledTimes(1);
     worker.stopPendingSessionResume();
   });
 
