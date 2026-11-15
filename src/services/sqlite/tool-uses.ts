@@ -395,6 +395,10 @@ export function countOwedToolUseSummaries(db: Database): number {
  * the observer can never answer stops replaying after a bounded number of
  * worker lifetimes. `limit` bounds the rows returned; the rest stay owed.
  */
+// BEGIN IMMEDIATE here and in reopenLostToolUses: both read, then write what
+// they read. A deferred transaction starts as a reader, and when another
+// connection commits between its read and its first write, SQLite refuses the
+// upgrade (SQLITE_BUSY_SNAPSHOT) however long busy_timeout is.
 export function takeOwedToolUses(
   db: Database,
   params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string>; limit?: number; nowEpoch?: number }
@@ -423,7 +427,7 @@ export function takeOwedToolUses(
       rows.push(row);
     }
     return { rows, parked };
-  })();
+  }).immediate();
 }
 
 /**
@@ -467,7 +471,7 @@ export function reopenLostToolUses(
       for (const row of lost) reopen.run(nowEpoch, row.id);
     }
     return { reopened: lost.length, sessions: new Set(lost.map(row => row.session_db_id)).size };
-  })();
+  }).immediate();
 }
 
 function mapPlatformFilter(platformSource: string | undefined): { clause: string; param: string } | null {

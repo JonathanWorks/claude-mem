@@ -1,6 +1,6 @@
 {
   "name": "claude-mem-cursor",
-  "version": "15.6.101",
+  "version": "15.6.102",
   "description": "Persistent memory for Cursor. Hooks ingest tool use; MCP searches past sessions. Works with a local worker or a self-hosted worker, and a local host-login observer or remote inference.",
   "author": {
     "name": "Alex Newman"
