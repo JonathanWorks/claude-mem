@@ -16,7 +16,7 @@ import { Database } from 'bun:sqlite';
 import { createHash } from 'crypto';
 import { logger } from '../../utils/logger.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource } from '../../shared/platform-source.js';
-import { isRecursiveMemoryTool } from '../../shared/memory-retrieval-tools.js';
+import { isExplicitMemoryWrite, isRecursiveMemoryTool } from '../../shared/memory-retrieval-tools.js';
 export { isRecursiveMemoryTool } from '../../shared/memory-retrieval-tools.js';
 
 /**
@@ -47,6 +47,23 @@ export const MAX_TOOL_PAYLOAD_BYTES = 64 * 1024;
  * (`openclaw/src/index.ts:802`); the prefix is mirrored here so every other
  * adapter gets the same protection.
  */
+/**
+ * Whether the observer still owes this row a summary pass (the summary ledger).
+ *
+ * - `pending`: captured, not yet answered by the observer. The worker's buffer
+ *   is rebuilt from these rows, so a restart, crash or reboot loses no work.
+ * - `done`: the observer answered the batch that held it (it may have stored
+ *   an observation or decided nothing was worth storing), or the row was never
+ *   queued. Never replayed.
+ * - `parked`: replayed `MAX_SUMMARY_ATTEMPTS` times, or its batch spent its
+ *   send budget. Kept for inspection, never replayed.
+ * - NULL: written before the ledger existed. Its state is unknown, so it is never replayed.
+ */
+export type ToolUseSummaryState = 'pending' | 'done' | 'parked';
+
+/** A row is parked, not replayed, once it has been loaded this many times. */
+export const MAX_SUMMARY_ATTEMPTS = 3;
+
 export interface ToolUseRow {
   id: number;
   tool_use_id: string;
@@ -87,6 +104,11 @@ export interface UpsertToolUseInput {
   orGenerationId?: string | null;
   orSessionId?: string | null;
   createdAtEpoch?: number;
+  /**
+   * True when the caller queues this tool use for the observer, false when it
+   * deliberately does not. Omitted leaves the ledger state unset (unknown).
+   */
+  summaryOwed?: boolean;
 }
 
 export interface ToolUseQueryFilters {
@@ -178,6 +200,23 @@ export function createToolUsesSchema(db: Database): void {
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_created_at_epoch ON tool_uses(created_at_epoch)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_observation_id ON tool_uses(observation_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_or_generation_id ON tool_uses(or_generation_id)');
+  ensureToolUseSummaryColumns(db);
+}
+
+/**
+ * Summary ledger columns. No schema_versions row, like the deliverables table,
+ * so an older worker sharing the database is unaffected. ALTERs guarded by a column probe so fresh and
+ * migrating databases converge and a second run is a no-op.
+ */
+export function ensureToolUseSummaryColumns(db: Database): void {
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(tool_uses)').all() as Array<{ name: string }>).map(column => column.name)
+  );
+  if (!columns.has('summary_state')) db.run('ALTER TABLE tool_uses ADD COLUMN summary_state TEXT');
+  if (!columns.has('summary_attempts')) db.run('ALTER TABLE tool_uses ADD COLUMN summary_attempts INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('summary_state_epoch')) db.run('ALTER TABLE tool_uses ADD COLUMN summary_state_epoch INTEGER');
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tool_uses_summary_owed
+    ON tool_uses(session_db_id, id) WHERE summary_state = 'pending'`);
 }
 
 /**
@@ -201,15 +240,17 @@ export function upsertToolUse(db: Database, input: UpsertToolUseInput): number |
 
   const toolInput = input.toolInput != null ? truncatePayload(input.toolInput) : null;
   const toolResponse = input.toolResponse != null ? truncatePayload(input.toolResponse) : null;
+  const summaryState: ToolUseSummaryState | null =
+    input.summaryOwed === undefined ? null : input.summaryOwed ? 'pending' : 'done';
 
   const row = db.prepare(`
     INSERT INTO tool_uses (
       tool_use_id, content_session_id, memory_session_id, session_db_id, project,
       platform_source, tool_name, tool_input, tool_response, cwd, prompt_number,
       agent_type, agent_id, or_generation_id, or_session_id, content_hash,
-      created_at, created_at_epoch
+      created_at, created_at_epoch, summary_state, summary_state_epoch
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(content_session_id, tool_use_id) DO UPDATE SET
       memory_session_id = CASE WHEN tool_uses.observation_id IS NULL
         THEN COALESCE(excluded.memory_session_id, tool_uses.memory_session_id)
@@ -225,7 +266,9 @@ export function upsertToolUse(db: Database, input: UpsertToolUseInput): number |
       agent_id          = COALESCE(excluded.agent_id, tool_uses.agent_id),
       or_generation_id  = COALESCE(excluded.or_generation_id, tool_uses.or_generation_id),
       or_session_id     = COALESCE(excluded.or_session_id, tool_uses.or_session_id),
-      content_hash      = excluded.content_hash
+      content_hash      = excluded.content_hash,
+      summary_state     = COALESCE(tool_uses.summary_state, excluded.summary_state),
+      summary_state_epoch = COALESCE(tool_uses.summary_state_epoch, excluded.summary_state_epoch)
     RETURNING id
   `).get(
     input.toolUseId,
@@ -245,7 +288,9 @@ export function upsertToolUse(db: Database, input: UpsertToolUseInput): number |
     input.orSessionId ?? null,
     contentHash,
     createdAt,
-    createdAtEpoch
+    createdAtEpoch,
+    summaryState,
+    summaryState === null ? null : createdAtEpoch
   ) as { id: number } | null;
 
   return row ? row.id : null;
@@ -294,6 +339,135 @@ export function linkToolUsesToObservation(
   );
 
   return Number(result.changes ?? 0);
+}
+
+/**
+ * Close the ledger entry of tool uses the observer has answered (`done`) or
+ * that will not be sent again (`parked`). Only `pending` rows move, so a
+ * repeated settle is a no-op and a settled row can never be reopened here.
+ *
+ * Returns the number of rows settled.
+ */
+export function settleToolUseSummaries(
+  db: Database,
+  params: { sessionDbId: number; toolUseIds: string[]; state: 'done' | 'parked'; nowEpoch?: number }
+): number {
+  const ids = params.toolUseIds.filter(id => typeof id === 'string' && id.length > 0);
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => '?').join(',');
+  const result = db.prepare(`
+    UPDATE tool_uses
+    SET summary_state = ?, summary_state_epoch = ?
+    WHERE session_db_id = ?
+      AND summary_state = 'pending'
+      AND tool_use_id IN (${placeholders})
+  `).run(params.state, params.nowEpoch ?? Date.now(), params.sessionDbId, ...ids);
+  return Number(result.changes ?? 0);
+}
+
+export interface OwedToolUseSession {
+  sessionDbId: number;
+  owed: number;
+  oldestCreatedAtEpoch: number;
+}
+
+/** Sessions that still hold `pending` rows, the one with the oldest row first. */
+export function listSessionsOwedSummaries(db: Database, limit: number): OwedToolUseSession[] {
+  return db.prepare(`
+    SELECT session_db_id AS sessionDbId, COUNT(*) AS owed, MIN(created_at_epoch) AS oldestCreatedAtEpoch
+    FROM tool_uses
+    WHERE summary_state = 'pending' AND session_db_id IS NOT NULL
+    GROUP BY session_db_id
+    ORDER BY oldestCreatedAtEpoch ASC, session_db_id ASC
+    LIMIT ?
+  `).all(limit) as OwedToolUseSession[];
+}
+
+export function countOwedToolUseSummaries(db: Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS owed FROM tool_uses WHERE summary_state = 'pending'`).get() as { owed: number };
+  return row.owed;
+}
+
+/**
+ * Take a session's `pending` rows for a replay, oldest first, skipping the
+ * ones the caller already holds. Each row taken counts one attempt; a row that
+ * has used `MAX_SUMMARY_ATTEMPTS` is parked instead of returned, so a tool use
+ * the observer can never answer stops replaying after a bounded number of
+ * worker lifetimes. `limit` bounds the rows returned; the rest stay owed.
+ */
+export function takeOwedToolUses(
+  db: Database,
+  params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string>; limit?: number; nowEpoch?: number }
+): { rows: ToolUseRow[]; parked: number } {
+  const nowEpoch = params.nowEpoch ?? Date.now();
+  return db.transaction(() => {
+    const owed = (db.prepare(`
+      SELECT * FROM tool_uses
+      WHERE session_db_id = ? AND summary_state = 'pending'
+      ORDER BY id ASC
+    `).all(params.sessionDbId) as Array<ToolUseRow & { summary_attempts: number }>)
+      .filter(row => !params.heldToolUseIds.has(row.tool_use_id));
+
+    const park = db.prepare(`UPDATE tool_uses SET summary_state = 'parked', summary_state_epoch = ? WHERE id = ?`);
+    const attempt = db.prepare('UPDATE tool_uses SET summary_attempts = summary_attempts + 1 WHERE id = ?');
+    const rows: ToolUseRow[] = [];
+    let parked = 0;
+    for (const row of owed) {
+      if (params.limit !== undefined && rows.length >= params.limit) break;
+      if (row.summary_attempts >= MAX_SUMMARY_ATTEMPTS) {
+        park.run(nowEpoch, row.id);
+        parked++;
+        continue;
+      }
+      attempt.run(row.id);
+      rows.push(row);
+    }
+    return { rows, parked };
+  })();
+}
+
+/**
+ * Reopen tool uses that a worker without the summary ledger held when it
+ * stopped. `sinceEpoch`..`beforeEpoch` is one lifetime of that worker: its
+ * start and its stop.
+ *
+ * A session is observed in capture order, so within one lifetime every tool
+ * use captured after the session's last linked one was still waiting when the
+ * worker stopped (or was answered with nothing to store, which a replay
+ * answers the same way). Only rows the ledger has never classified move, so a
+ * second run over the same window reopens nothing.
+ *
+ * With `apply` false it changes nothing and reports what it would reopen.
+ */
+export function reopenLostToolUses(
+  db: Database,
+  params: { sinceEpoch: number; beforeEpoch: number; apply: boolean; nowEpoch?: number }
+): { reopened: number; sessions: number } {
+  return db.transaction(() => {
+    const lost = (db.prepare(`
+      SELECT t.id, t.session_db_id, t.tool_name
+      FROM tool_uses t
+      WHERE t.summary_state IS NULL
+        AND t.observation_id IS NULL
+        AND t.session_db_id IS NOT NULL
+        AND t.created_at_epoch >= ? AND t.created_at_epoch < ?
+        AND t.id > COALESCE((
+          SELECT MAX(linked.id) FROM tool_uses linked
+          WHERE linked.session_db_id = t.session_db_id
+            AND linked.observation_id IS NOT NULL
+            AND linked.created_at_epoch >= ? AND linked.created_at_epoch < ?
+        ), 0)
+    `).all(params.sinceEpoch, params.beforeEpoch, params.sinceEpoch, params.beforeEpoch) as Array<{
+      id: number; session_db_id: number; tool_name: string;
+    }>).filter(row => !isExplicitMemoryWrite(row.tool_name));
+
+    if (params.apply) {
+      const reopen = db.prepare(`UPDATE tool_uses SET summary_state = 'pending', summary_state_epoch = ? WHERE id = ?`);
+      const nowEpoch = params.nowEpoch ?? Date.now();
+      for (const row of lost) reopen.run(nowEpoch, row.id);
+    }
+    return { reopened: lost.length, sessions: new Set(lost.map(row => row.session_db_id)).size };
+  })();
 }
 
 function mapPlatformFilter(platformSource: string | undefined): { clause: string; param: string } | null {

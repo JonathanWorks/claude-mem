@@ -512,6 +512,7 @@ export class WorkerService implements WorkerRef {
     if (this.pendingSessionResumeTimer !== null || this.isShuttingDown) return;
     this.pendingSessionResumeTimer = setInterval(() => {
       if (!this.initializationCompleteFlag || this.isShuttingDown) return;
+      sessionRoutes.admitSummaryBacklog();
       sessionRoutes.resumePendingSessions('periodic-resume');
     }, 60_000);
     this.pendingSessionResumeTimer.unref?.();

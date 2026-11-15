@@ -730,7 +730,10 @@ export class DataRoutes extends BaseRouteHandler {
     // #2756 — additive: sessions currently parked in waitForSlot, never a
     // breaking change to existing isProcessing/queueDepth consumers.
     const parkedSessions = getParkedSlotWaiterCount();
-    res.json({ isProcessing, queueDepth, parkedSessions });
+    // Additive: tool uses the summary ledger still holds as owed, buffered or
+    // not. queueDepth counts only what this worker has buffered.
+    const owedToolUses = this.sessionManager.getOwedToolUseCount();
+    res.json({ isProcessing, queueDepth, parkedSessions, owedToolUses });
   });
 
   private parsePaginationParams(req: Request): { offset: number; limit: number; project?: string; platformSource?: string; contentSessionId?: string } {

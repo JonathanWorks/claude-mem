@@ -28,6 +28,14 @@ export interface DrainOptions {
 }
 
 /**
+ * Where the buffer records that a tool use needs no further summary pass. The
+ * worker backs it with the `tool_uses` summary ledger (sqlite/tool-uses.ts).
+ */
+export interface SummaryLedger {
+  settle(sessionDbId: number, toolUseIds: string[], state: 'done' | 'parked'): void;
+}
+
+/**
  * Per-session in-RAM observation buffer. This replaces the durable
  * `pending_messages` SQLite queue (and the BullMQ engine that mirrored it).
  *
@@ -47,6 +55,15 @@ export interface DrainOptions {
  * single live generator pass (drop a stored batch; re-yield a batch that
  * couldn't be stored yet because the memory session id wasn't captured). They
  * never cross a process boundary.
+ *
+ * PWM fork: the buffer is a working copy, and the `tool_uses` summary ledger
+ * decides what is still owed. A tool use stays `pending` there until this
+ * buffer confirms or parks it, so what a dead worker held is loaded again by
+ * SessionManager.loadOwedToolUses. That is safe where the old durable queue
+ * was not: a batch's ledger entries close in the transaction that stores its
+ * observations, so a stored batch cannot replay, and a row is parked after a
+ * bounded number of loads, so nothing replays forever. Messages without a
+ * tool use id (summarize, init) still live only for the process lifetime.
  */
 export class SessionMessageBuffer {
   private readonly buffers = new Map<number, BufferedMessage[]>();
@@ -54,7 +71,10 @@ export class SessionMessageBuffer {
   private readonly seenToolUseIds = new Map<number, Set<string>>();
   private nextId = 1;
 
-  constructor(private readonly onMutate?: () => void) {}
+  constructor(
+    private readonly onMutate?: () => void,
+    private readonly ledger?: SummaryLedger,
+  ) {}
 
   /**
    * Append a message. Returns the assigned id, or 0 if suppressed as a
@@ -81,10 +101,11 @@ export class SessionMessageBuffer {
 
   /** Remove a stored message by id. Returns 1 if found, 0 otherwise. */
   confirm(messageId: number): number {
-    for (const list of this.buffers.values()) {
+    for (const [sessionDbId, list] of this.buffers) {
       const idx = list.findIndex(m => m.id === messageId);
       if (idx !== -1) {
-        list.splice(idx, 1);
+        const [confirmed] = list.splice(idx, 1);
+        this.settle(sessionDbId, [confirmed], 'done');
         this.onMutate?.();
         return 1;
       }
@@ -116,17 +137,20 @@ export class SessionMessageBuffer {
    */
   park(sessionDbId: number, messageIds: readonly number[], clientAttemptId: string): number[] {
     const wanted = new Set(messageIds);
-    const parkedIds: number[] = [];
+    const parked: BufferedMessage[] = [];
     for (const m of this.buffers.get(sessionDbId) ?? []) {
       if (wanted.has(m.id) && !m.parked) {
         m.parked = true;
         m.parkedClientAttemptId = clientAttemptId;
         m.claimed = false;
-        parkedIds.push(m.id);
+        parked.push(m);
       }
     }
-    if (parkedIds.length > 0) this.onMutate?.();
-    return parkedIds;
+    if (parked.length > 0) {
+      this.settle(sessionDbId, parked, 'parked');
+      this.onMutate?.();
+    }
+    return parked.map(m => m.id);
   }
 
   getParkedMessages(sessionDbId: number): Array<{ messageId: number; clientAttemptId: string | undefined }> {
@@ -155,6 +179,11 @@ export class SessionMessageBuffer {
     this.seenToolUseIds.delete(sessionDbId);
     this.events.get(sessionDbId)?.removeAllListeners();
     this.events.delete(sessionDbId);
+  }
+
+  /** Tool use ids this buffer has taken for the session in this worker's lifetime. */
+  getHeldToolUseIds(sessionDbId: number): ReadonlySet<string> {
+    return this.seenToolUseIds.get(sessionDbId) ?? new Set<string>();
   }
 
   /** Messages still to be sent: parked ones are excluded, nothing will send them. */
@@ -307,6 +336,28 @@ export class SessionMessageBuffer {
       signal.addEventListener('abort', onAbort, { once: true });
       timeoutId = setTimeout(onTimeout, timeoutMs);
     });
+  }
+
+  /**
+   * A ledger write that fails must not undo the confirm or park that caused
+   * it: the row then stays `pending` and is loaded again later, which costs a
+   * repeated request, not a lost tool use.
+   */
+  private settle(sessionDbId: number, messages: readonly BufferedMessage[], state: 'done' | 'parked'): void {
+    if (!this.ledger) return;
+    const toolUseIds = messages
+      .map(m => m.message.toolUseId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (toolUseIds.length === 0) return;
+    try {
+      this.ledger.settle(sessionDbId, toolUseIds, state);
+    } catch (error) {
+      logger.warn('QUEUE', 'Summary ledger write failed; the tool uses stay owed', {
+        sessionId: sessionDbId,
+        state,
+        toolUseCount: toolUseIds.length,
+      }, error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   private getList(sessionDbId: number): BufferedMessage[] {

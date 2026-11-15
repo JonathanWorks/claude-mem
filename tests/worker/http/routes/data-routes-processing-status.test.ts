@@ -76,6 +76,7 @@ describe('DataRoutes GET /api/processing-status — parkedSessions (#2756)', () 
     const mockSessionManager = {
       isAnySessionProcessing: mock(() => Promise.resolve(false)),
       getTotalActiveWork: mock(() => Promise.resolve(0)),
+      getOwedToolUseCount: mock(() => 0),
     };
 
     const routes = new DataRoutes(
@@ -90,7 +91,7 @@ describe('DataRoutes GET /api/processing-status — parkedSessions (#2756)', () 
     const { req, res, waitForJson } = createMockReqRes();
     (routes as any).handleGetProcessingStatus(req as Request, res as Response);
 
-    expect(await waitForJson()).toEqual({ isProcessing: false, queueDepth: 0, parkedSessions: 0 });
+    expect(await waitForJson()).toEqual({ isProcessing: false, queueDepth: 0, parkedSessions: 0, owedToolUses: 0 });
   });
 
   it('reports a positive parkedSessions count while a session is parked in waitForSlot, without touching isProcessing/queueDepth', async () => {
@@ -109,6 +110,7 @@ describe('DataRoutes GET /api/processing-status — parkedSessions (#2756)', () 
       const mockSessionManager = {
         isAnySessionProcessing: mock(() => Promise.resolve(true)),
         getTotalActiveWork: mock(() => Promise.resolve(5)),
+        getOwedToolUseCount: mock(() => 7),
       };
 
       const routes = new DataRoutes(
@@ -123,7 +125,7 @@ describe('DataRoutes GET /api/processing-status — parkedSessions (#2756)', () 
       const { req, res, waitForJson } = createMockReqRes();
       (routes as any).handleGetProcessingStatus(req as Request, res as Response);
 
-      expect(await waitForJson()).toEqual({ isProcessing: true, queueDepth: 5, parkedSessions: 1 });
+      expect(await waitForJson()).toEqual({ isProcessing: true, queueDepth: 5, parkedSessions: 1, owedToolUses: 7 });
     } finally {
       // Free the slot so parkedPromise settles, then clean up the occupant —
       // never leak a parked waiter or a fake 'sdk' entry into later test files.

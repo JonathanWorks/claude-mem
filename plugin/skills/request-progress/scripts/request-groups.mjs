@@ -952,6 +952,8 @@ var init_SettingsDefaultsManager = __esm({
         // calls are new observer spend (the gateway allowance, or the user's own
         // plan), so capture is opt-in (Wave 3 gate R4-5).
         CLAUDE_MEM_CODEX_SUBAGENT_INGESTION: "false",
+        CLAUDE_MEM_SUMMARY_BACKLOG_SESSIONS: "1",
+        // Sessions replayed at a time from tool uses a stopped worker left unsummarized (0 = off)
         CLAUDE_MEM_MAX_CONCURRENT_AGENTS: "2",
         // Max concurrent Claude SDK agent subprocesses
         CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS: "400000",

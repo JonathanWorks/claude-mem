@@ -13,6 +13,7 @@ import { planUnattendedGatewayResume, unattendedGatewayResumesSpent } from './se
 import { PROVIDER_SWITCH_BOUNDARY_ABORT_REASON } from './session/abort-reason.js';
 import { isSimpleTierMessage } from './session/tier-routing.js';
 import { claudeStandInStillServes } from '../../shared/claude-fallback-readiness.js';
+import type { SessionStore } from '../sqlite/SessionStore.js';
 
 export const SESSION_END_WRAPUP_GRACE_MS = 5_000;
 
@@ -46,12 +47,27 @@ type ReadyTransportResume = {
   state: TransportResumeState;
 };
 
+/**
+ * Owed tool uses a session takes from the summary ledger at a time. The rest
+ * stay in the database, so a large backlog never sits in RAM, and a session
+ * with live work is not buried under old work: it takes the next chunk only
+ * when it has fewer than OWED_REFILL_BELOW messages left to send.
+ */
+const OWED_LOAD_CHUNK = 32;
+const OWED_REFILL_BELOW = 8;
+
 export class SessionManager {
   private dbManager: DatabaseManager;
   private sessions: Map<number, ActiveSession> = new Map();
   private onPendingMutate?: () => void;
   private telegramWrapupFormatter: TelegramWrapupFormatter | null = null;
-  private readonly buffer = new SessionMessageBuffer(() => this.onPendingMutate?.());
+  private readonly buffer = new SessionMessageBuffer(() => this.onPendingMutate?.(), {
+    settle: (sessionDbId, toolUseIds, state) => {
+      this.dbManager.getSessionStore().settleToolUseSummaries({ sessionDbId, toolUseIds, state });
+    },
+  });
+  /** Sessions admitted from the summary ledger backlog, not by live capture. */
+  private readonly backlogSessions = new Set<number>();
   private generatorStarter: ((sessionDbId: number, source: string) => void | Promise<void>) | null = null;
   private transportResumes = new Map<number, TransportResumeState>();
   private transportResumeReady: ReadyTransportResume[] = [];
@@ -473,10 +489,7 @@ export class SessionManager {
    * the generator kick) — see HookSpool.drain.
    */
   queueObservation(sessionDbId: number, data: ObservationData, enqueuedAtEpochMs?: number): void {
-    let session = this.sessions.get(sessionDbId);
-    if (!session) {
-      session = this.initializeSession(sessionDbId);
-    }
+    this.sessionWithOwedWork(sessionDbId, data.toolUseId);
 
     const message: PendingMessage = {
       type: 'observation',
@@ -511,10 +524,7 @@ export class SessionManager {
     promptNumber?: number,
     enqueuedAtEpochMs?: number,
   ): void {
-    let session = this.sessions.get(sessionDbId);
-    if (!session) {
-      session = this.initializeSession(sessionDbId);
-    }
+    const session = this.sessionWithOwedWork(sessionDbId);
 
     const message: PendingMessage = {
       type: 'summarize',
@@ -533,6 +543,115 @@ export class SessionManager {
         sessionId: sessionDbId
       });
     }
+  }
+
+  /**
+   * The session, created when this worker does not hold it yet. A session
+   * this worker first sees may have tool uses a dead worker left owed; they
+   * are older than whatever the caller queues next, so they load first.
+   * `arrivingToolUseId` is the tool use the caller is about to queue itself.
+   */
+  private sessionWithOwedWork(sessionDbId: number, arrivingToolUseId?: string): ActiveSession {
+    const held = this.sessions.get(sessionDbId);
+    if (held) return held;
+    const session = this.initializeSession(sessionDbId);
+    this.loadOwedToolUses(sessionDbId, arrivingToolUseId);
+    return session;
+  }
+
+  /**
+   * Buffer the next chunk of the session's tool uses the summary ledger still
+   * holds as owed and this worker does not hold. Returns how many were buffered.
+   *
+   * Never fatal: capture and live work must go on when the ledger cannot be
+   * read; the rows stay owed and the next load takes them.
+   */
+  loadOwedToolUses(sessionDbId: number, arrivingToolUseId?: string): number {
+    const held = new Set(this.buffer.getHeldToolUseIds(sessionDbId));
+    if (arrivingToolUseId) held.add(arrivingToolUseId);
+    let owed: ReturnType<SessionStore['takeOwedToolUses']>;
+    try {
+      owed = this.dbManager.getSessionStore().takeOwedToolUses(sessionDbId, held, OWED_LOAD_CHUNK);
+    } catch (error) {
+      logger.warn('QUEUE', 'Could not read owed tool uses from the summary ledger', { sessionId: sessionDbId },
+        error instanceof Error ? error : new Error(String(error)));
+      return 0;
+    }
+    for (const row of owed.rows) {
+      this.buffer.enqueue(sessionDbId, {
+        type: 'observation',
+        tool_name: row.tool_name,
+        tool_input: row.tool_input ?? '{}',
+        tool_response: row.tool_response ?? '{}',
+        prompt_number: row.prompt_number ?? 0,
+        cwd: row.cwd ?? '',
+        agentId: row.agent_id ?? undefined,
+        agentType: row.agent_type ?? undefined,
+        toolUseId: row.tool_use_id,
+      }, row.created_at_epoch);
+    }
+    if (owed.rows.length > 0 || owed.parked > 0) {
+      logger.info('QUEUE', `OWED_LOADED | sessionDbId=${sessionDbId} | loaded=${owed.rows.length} | parked=${owed.parked}`, {
+        sessionId: sessionDbId,
+      });
+    }
+    return owed.rows.length;
+  }
+
+  /**
+   * Feed the buffer from the summary ledger backlog. Sessions this worker
+   * already holds take their next chunk of owed tool uses when they run low.
+   * Sessions that no live capture has brought back are admitted oldest first,
+   * at most `maxSessions` of them holding unsent work at a time, so the
+   * backlog stays in the database and live sessions keep their share of the
+   * provider. Returns the sessions admitted by this call.
+   */
+  admitOwedSessions(maxSessions: number): number[] {
+    // Sessions this worker holds, live or admitted, take their next chunk first.
+    for (const sessionDbId of this.sessions.keys()) {
+      if (!this.deletingSessions.has(sessionDbId) && this.buffer.getPendingCount(sessionDbId) < OWED_REFILL_BELOW) {
+        this.loadOwedToolUses(sessionDbId);
+      }
+    }
+
+    let unfinished = 0;
+    for (const sessionDbId of this.backlogSessions) {
+      const session = this.sessions.get(sessionDbId);
+      if (!session) {
+        this.backlogSessions.delete(sessionDbId);
+      } else if (this.buffer.getPendingCount(sessionDbId) > 0) {
+        unfinished++;
+      } else if (!session.generatorPromise) {
+        // Its backlog is answered and its generator has ended: nothing else
+        // would ever release a session that no live client is attached to.
+        this.backlogSessions.delete(sessionDbId);
+        void this.deleteSession(sessionDbId);
+      }
+    }
+    const free = maxSessions - unfinished;
+    if (free <= 0) return [];
+
+    const store = this.dbManager.getSessionStore();
+    const admitted: number[] = [];
+    // Held sessions can fill the head of the list, so read past `free`.
+    for (const candidate of store.listSessionsOwedSummaries(free + this.sessions.size + this.deletingSessions.size)) {
+      if (admitted.length >= free) break;
+      const sessionDbId = candidate.sessionDbId;
+      if (this.sessions.has(sessionDbId) || this.deletingSessions.has(sessionDbId)) continue;
+      if (!store.getSessionById(sessionDbId)) {
+        // The session row is gone, so nothing can observe these tool uses.
+        const orphaned = store.takeOwedToolUses(sessionDbId, new Set()).rows.map(row => row.tool_use_id);
+        store.settleToolUseSummaries({ sessionDbId, toolUseIds: orphaned, state: 'parked' });
+        logger.warn('QUEUE', 'Parked owed tool uses of a session that no longer exists', { sessionId: sessionDbId, parked: orphaned.length });
+        continue;
+      }
+      this.initializeSession(sessionDbId);
+      if (this.loadOwedToolUses(sessionDbId) > 0) {
+        this.backlogSessions.add(sessionDbId);
+        admitted.push(sessionDbId);
+      }
+    }
+    return admitted;
   }
 
   async clearPendingForSession(sessionDbId: number): Promise<number> {
@@ -814,6 +933,11 @@ export class SessionManager {
     return this.buffer.getTotalDepth();
   }
 
+  /** Tool uses the summary ledger holds as owed, whether this worker has buffered them or not. */
+  getOwedToolUseCount(): number {
+    return this.dbManager.getSessionStore().countOwedToolUseSummaries();
+  }
+
   /** See SessionMessageBuffer.getLastAssignedId. */
   getLastBufferedMessageId(): number {
     return this.buffer.getLastAssignedId();
@@ -833,10 +957,7 @@ export class SessionManager {
   }
 
   async *getMessageIterator(sessionDbId: number): AsyncIterableIterator<PendingMessageWithId> {
-    let session = this.sessions.get(sessionDbId);
-    if (!session) {
-      session = this.initializeSession(sessionDbId);
-    }
+    const session = this.sessionWithOwedWork(sessionDbId);
 
     // Re-yield anything a prior generator pass claimed but did not confirm.
     await this.resetProcessingToPending(sessionDbId);
