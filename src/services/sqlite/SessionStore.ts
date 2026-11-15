@@ -3192,8 +3192,12 @@ export class SessionStore {
     return countOwedToolUseSummaryRows(this.db);
   }
 
-  takeOwedToolUses(sessionDbId: number, heldToolUseIds: ReadonlySet<string>): { rows: ToolUseRow[]; parked: number } {
-    return takeOwedToolUseRows(this.db, { sessionDbId, heldToolUseIds });
+  takeOwedToolUses(
+    sessionDbId: number,
+    heldToolUseIds: ReadonlySet<string>,
+    limit?: number,
+  ): { rows: ToolUseRow[]; parked: number } {
+    return takeOwedToolUseRows(this.db, { sessionDbId, heldToolUseIds, limit });
   }
 
   linkToolUsesToObservation(params: {

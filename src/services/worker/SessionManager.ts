@@ -47,6 +47,15 @@ type ReadyTransportResume = {
   state: TransportResumeState;
 };
 
+/**
+ * Owed tool uses a session takes from the summary ledger at a time. The rest
+ * stay in the database, so a large backlog never sits in RAM, and a session
+ * with live work is not buried under old work: it takes the next chunk only
+ * when it has fewer than OWED_REFILL_BELOW messages left to send.
+ */
+const OWED_LOAD_CHUNK = 32;
+const OWED_REFILL_BELOW = 8;
+
 export class SessionManager {
   private dbManager: DatabaseManager;
   private sessions: Map<number, ActiveSession> = new Map();
@@ -551,8 +560,8 @@ export class SessionManager {
   }
 
   /**
-   * Buffer the session's tool uses the summary ledger still holds as owed and
-   * this worker does not hold. Returns how many were buffered.
+   * Buffer the next chunk of the session's tool uses the summary ledger still
+   * holds as owed and this worker does not hold. Returns how many were buffered.
    *
    * Never fatal: capture and live work must go on when the ledger cannot be
    * read; the rows stay owed and the next load takes them.
@@ -562,7 +571,7 @@ export class SessionManager {
     if (arrivingToolUseId) held.add(arrivingToolUseId);
     let owed: ReturnType<SessionStore['takeOwedToolUses']>;
     try {
-      owed = this.dbManager.getSessionStore().takeOwedToolUses(sessionDbId, held);
+      owed = this.dbManager.getSessionStore().takeOwedToolUses(sessionDbId, held, OWED_LOAD_CHUNK);
     } catch (error) {
       logger.warn('QUEUE', 'Could not read owed tool uses from the summary ledger', { sessionId: sessionDbId },
         error instanceof Error ? error : new Error(String(error)));
@@ -590,13 +599,21 @@ export class SessionManager {
   }
 
   /**
-   * Admit sessions from the summary ledger backlog: sessions with owed tool
-   * uses that no live capture has brought back into this worker. At most
-   * `maxSessions` of them hold unsent work at a time, oldest first, so the
+   * Feed the buffer from the summary ledger backlog. Sessions this worker
+   * already holds take their next chunk of owed tool uses when they run low.
+   * Sessions that no live capture has brought back are admitted oldest first,
+   * at most `maxSessions` of them holding unsent work at a time, so the
    * backlog stays in the database and live sessions keep their share of the
    * provider. Returns the sessions admitted by this call.
    */
   admitOwedSessions(maxSessions: number): number[] {
+    // Sessions this worker holds, live or admitted, take their next chunk first.
+    for (const sessionDbId of this.sessions.keys()) {
+      if (!this.deletingSessions.has(sessionDbId) && this.buffer.getPendingCount(sessionDbId) < OWED_REFILL_BELOW) {
+        this.loadOwedToolUses(sessionDbId);
+      }
+    }
+
     let unfinished = 0;
     for (const sessionDbId of this.backlogSessions) {
       const session = this.sessions.get(sessionDbId);

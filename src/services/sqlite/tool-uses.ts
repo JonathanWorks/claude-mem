@@ -393,11 +393,11 @@ export function countOwedToolUseSummaries(db: Database): number {
  * ones the caller already holds. Each row taken counts one attempt; a row that
  * has used `MAX_SUMMARY_ATTEMPTS` is parked instead of returned, so a tool use
  * the observer can never answer stops replaying after a bounded number of
- * worker lifetimes.
+ * worker lifetimes. `limit` bounds the rows returned; the rest stay owed.
  */
 export function takeOwedToolUses(
   db: Database,
-  params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string>; nowEpoch?: number }
+  params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string>; limit?: number; nowEpoch?: number }
 ): { rows: ToolUseRow[]; parked: number } {
   const nowEpoch = params.nowEpoch ?? Date.now();
   return db.transaction(() => {
@@ -413,6 +413,7 @@ export function takeOwedToolUses(
     const rows: ToolUseRow[] = [];
     let parked = 0;
     for (const row of owed) {
+      if (params.limit !== undefined && rows.length >= params.limit) break;
       if (row.summary_attempts >= MAX_SUMMARY_ATTEMPTS) {
         park.run(nowEpoch, row.id);
         parked++;

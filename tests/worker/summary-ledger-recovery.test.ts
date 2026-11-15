@@ -304,6 +304,35 @@ describe('summary ledger recovery', () => {
       expect(state('l1').summary_attempts).toBe(1);
     });
 
+    it('feeds a session the worker already holds, so work reopened under it is not stranded', () => {
+      const live = newSession('live');
+      const manager = workerLifetime();
+      manager.queueSummarize(live, 'still open');
+      for (const message of claimAll(manager, live)) manager.getMessageBuffer().confirm(message.id);
+      capture(live, 'reopened', 100);
+
+      expect(manager.admitOwedSessions(1)).toEqual([]);
+      expect(claimAll(manager, live).map(m => m.toolUseId)).toEqual(['reopened']);
+    });
+
+    it('takes a large backlog in chunks, the next one only when the session runs low', () => {
+      const sessionDbId = newSession('big');
+      for (let i = 0; i < 40; i++) capture(sessionDbId, `t${String(i).padStart(2, '0')}`, 100 + i);
+      const manager = workerLifetime();
+
+      manager.admitOwedSessions(1);
+      expect(manager.getTotalQueueDepth()).toBe(32);
+      manager.admitOwedSessions(1);
+      expect(manager.getTotalQueueDepth()).toBe(32);
+
+      const claimed = claimAll(manager, sessionDbId);
+      for (const message of claimed.slice(0, 30)) manager.getMessageBuffer().confirm(message.id);
+      manager.admitOwedSessions(1);
+
+      expect(manager.getTotalQueueDepth()).toBe(10);
+      expect(store.countOwedToolUseSummaries()).toBe(10);
+    });
+
     it('admits nothing when the limit is zero', () => {
       capture(newSession('a'), 't1', 1);
 
