@@ -75,6 +75,10 @@ const fixture = String.raw`
   } finally { store.close(); }
 `;
 
+// These two scenarios each start a fresh bun process that loads the whole search stack. That took
+// 4.1-4.2 s on the CI runner against bun's 5 s default, so a slow runner failed them by timeout.
+const SUBPROCESS_FIXTURE_TIMEOUT_MS = 30_000;
+
 function runFixture(extraEnv: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'observation-filters-'));
   try {
@@ -116,7 +120,7 @@ describe('observation endpoint semantic row filters', () => {
       expect(result.hydratedIds.length).toBeLessThanOrEqual(1600);
       expect(result.text.match(/WANTED_SEMANTIC/g)).toHaveLength(1);
     }
-  });
+  }, SUBPROCESS_FIXTURE_TIMEOUT_MS);
   it('bounds raw semantic work, hydrates each ID once and uses filtered keyword fallback', () => {
     for (const fragments of ['1', '5']) {
       const result = runFixture({ BUDGET_SCENARIO: '1', UNRELATED_COUNT: '8192', FRAGMENT_COUNT: fragments });
@@ -127,7 +131,7 @@ describe('observation endpoint semantic row filters', () => {
       expect(result.hydratedIds.length).toBeLessThanOrEqual(1600);
       expect(new Set(result.hydratedIds).size).toBe(result.hydratedIds.length);
     }
-  });
+  }, SUBPROCESS_FIXTURE_TIMEOUT_MS);
   it('applies filters on both production paths without depending on a tied FTS winner', () => {
     for (const reversed of ['0', '1']) expectFilteredResults(runFixture({ REVERSE_WANTED_INSERTS: reversed }).results);
   });
