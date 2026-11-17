@@ -7,7 +7,8 @@
  * follow those agents' files as found on a real machine (see each reader).
  */
 
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { createHash } from 'crypto';
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { basename, join } from 'path';
@@ -444,7 +445,7 @@ export function createAntigravityCliReader(): AgentPromptReader {
 interface OpenCodeTextPart { messageId: string; sessionId: string; role: string; createdAt: number; directory: string; parentId: string | null; data: string }
 
 function readOpenCodeTextParts(path: string, role: 'user' | 'assistant'): OpenCodeTextPart[] {
-  const database = new Database(path, { readonly: true });
+  const database = openSqliteDatabase(path, { readonly: true });
   try {
     return database.prepare(`SELECT p.message_id AS messageId, m.session_id AS sessionId, json_extract(m.data, '$.role') AS role,
         m.time_created AS createdAt, s.directory, s.parent_id AS parentId, p.data

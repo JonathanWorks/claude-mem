@@ -1,7 +1,8 @@
 
 import path from 'path';
 import { existsSync, writeFileSync, mkdirSync, rmSync, statSync, copyFileSync, statfsSync } from 'fs';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { DATA_DIR, OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
@@ -91,7 +92,7 @@ function countObserverSessionRows(db: Database): { sessions: number; cascadeRows
 
 function scanCleanupCounts(dbPath: string): CleanupCounts {
   const counts = emptyCounts();
-  const db = new Database(dbPath, { readonly: true });
+  const db = openSqliteDatabase(dbPath, { readonly: true });
   try {
     const observer = countObserverSessionRows(db);
     counts.observerSessions = observer.sessions;
@@ -171,7 +172,7 @@ function executeCleanup(dbPath: string, effectiveDataDir: string, markerPath: st
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   backupPath = path.join(effectiveBackupsDir, `claude-mem-pre-12.4.3-${ts}.db`);
 
-  const backupDb = new Database(dbPath, { readonly: true });
+  const backupDb = openSqliteDatabase(dbPath, { readonly: true });
   let vacuumFailed = false;
   try {
     backupDb.run(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);

@@ -1,4 +1,5 @@
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -36,7 +37,7 @@ export class LocalReviewStore {
     // A damaged optional review sidecar must never stop the memory worker.
     try {
       if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-      this.db = new Database(path, { create: true });
+      this.db = openSqliteDatabase(path, { create: true });
       this.db.exec('PRAGMA busy_timeout = 1500');
       this.db.exec(`CREATE TABLE IF NOT EXISTS work_view_reviews (
       request_id TEXT PRIMARY KEY,

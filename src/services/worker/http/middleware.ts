@@ -18,6 +18,7 @@ import {
   type WorkerOriginPolicy,
 } from './origin-policy.js';
 import { redactForLog } from '../../../utils/redaction.js';
+import { sqlScopeMiddleware } from '../../sqlite/sql-scope.js';
 
 /**
  * Every worker response refuses framing, except Observation TV (`/tv`,
@@ -48,6 +49,9 @@ export function createMiddleware(): RequestHandler[] {
     if (req.method === 'POST' && /^\/api\/spool\/ingest\/?$/i.test(req.path)) return next();
     parseJson(req, res, next);
   });
+
+  // After the body parser: it resumes next() from stream callbacks, which can lose the async context.
+  middlewares.push(sqlScopeMiddleware());
 
   middlewares.push((req: Request, res: Response, next: NextFunction) => {
     const staticExtensions = ['.html', '.js', '.css', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.woff', '.woff2', '.ttf', '.eot'];

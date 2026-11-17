@@ -1,7 +1,7 @@
 import { existsSync, renameSync as fsRenameSync, unlinkSync } from 'fs';
 import { copyFile } from 'fs/promises';
 import { join } from 'path';
-import { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { logger } from '../../utils/logger.js';
 import { renameWithWindowsRetry } from '../../shared/atomic-json.js';
 import { runSqliteFileJob } from './sqlite-file-job.js';
@@ -83,7 +83,7 @@ function removeIfPresent(path: string): void {
  */
 function readAutoincrementCounters(dbPath: string): Array<{ name: string; seq: number }> {
   try {
-    const db = new Database(dbPath, { readwrite: true, create: false });
+    const db = openSqliteDatabase(dbPath, { readwrite: true, create: false });
     try {
       const hasTable = db.query("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").get();
       if (!hasTable) return [];
@@ -106,7 +106,7 @@ function readAutoincrementCounters(dbPath: string): Array<{ name: string; seq: n
  */
 function carryAutoincrementCounters(stagedDb: string, counters: Array<{ name: string; seq: number }>): void {
   if (counters.length === 0) return;
-  const db = new Database(stagedDb, { readwrite: true, create: false });
+  const db = openSqliteDatabase(stagedDb, { readwrite: true, create: false });
   try {
     const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name));
     if (!tables.has('sqlite_sequence')) return;

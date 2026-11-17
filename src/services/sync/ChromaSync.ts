@@ -17,6 +17,7 @@ import { USER_SETTINGS_PATH, paths } from '../../shared/paths.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import type * as SqliteFilesModule from '../sqlite/observations/files.js';
 import { streamRows } from '../sqlite/stream-rows.js';
+import { runWithSqlScope } from '../sqlite/sql-scope.js';
 
 type SessionStore = SessionStoreType;
 
@@ -957,7 +958,25 @@ export class ChromaSync {
     }
   }
 
-  async syncObservation(
+  /** Runs inside a SQL scope so many short statements in one sync job add up in the SLOW_REQUEST log. */
+  syncObservation(
+    observationId: number,
+    memorySessionId: string,
+    project: string,
+    obs: ParsedObservation & { text?: string | null; merged_into_project?: string | null },
+    promptNumber: number,
+    createdAtEpoch: number,
+    platformSource?: string,
+    replaceExisting = false,
+    loadCurrent?: () => CurrentRow<StoredObservation> | undefined
+  ): Promise<void> {
+    return runWithSqlScope('chroma:syncObservation', () => this.syncObservationBody(
+      observationId, memorySessionId, project, obs, promptNumber, createdAtEpoch,
+      platformSource, replaceExisting, loadCurrent,
+    ));
+  }
+
+  private async syncObservationBody(
     observationId: number,
     memorySessionId: string,
     project: string,
@@ -1029,7 +1048,24 @@ export class ChromaSync {
     }
   }
 
-  async syncSummary(
+  syncSummary(
+    summaryId: number,
+    memorySessionId: string,
+    project: string,
+    summary: ParsedSummary & { merged_into_project?: string | null },
+    promptNumber: number,
+    createdAtEpoch: number,
+    platformSource?: string,
+    replaceExisting = false,
+    loadCurrent?: () => CurrentRow<StoredSummary> | undefined
+  ): Promise<void> {
+    return runWithSqlScope('chroma:syncSummary', () => this.syncSummaryBody(
+      summaryId, memorySessionId, project, summary, promptNumber, createdAtEpoch,
+      platformSource, replaceExisting, loadCurrent,
+    ));
+  }
+
+  private async syncSummaryBody(
     summaryId: number,
     memorySessionId: string,
     project: string,
@@ -1105,7 +1141,23 @@ export class ChromaSync {
     };
   }
 
-  async syncUserPrompt(
+  syncUserPrompt(
+    promptId: number,
+    memorySessionId: string,
+    project: string,
+    promptText: string,
+    promptNumber: number,
+    createdAtEpoch: number,
+    platformSource?: string,
+    loadCurrent?: () => StoredUserPrompt | undefined
+  ): Promise<void> {
+    return runWithSqlScope('chroma:syncUserPrompt', () => this.syncUserPromptBody(
+      promptId, memorySessionId, project, promptText, promptNumber, createdAtEpoch,
+      platformSource, loadCurrent,
+    ));
+  }
+
+  private async syncUserPromptBody(
     promptId: number,
     memorySessionId: string,
     project: string,
@@ -1334,7 +1386,11 @@ export class ChromaSync {
    * worker shutdown, repeated write failures, or a dropped collection). The
    * next run resumes from the watermarks and pending rows.
    */
-  async ensureBackfilled(project: string, store: SessionStore): Promise<BackfillOutcome> {
+  ensureBackfilled(project: string, store: SessionStore): Promise<BackfillOutcome> {
+    return runWithSqlScope('chroma:ensureBackfilled', () => this.ensureBackfilledBody(project, store));
+  }
+
+  private async ensureBackfilledBody(project: string, store: SessionStore): Promise<BackfillOutcome> {
     if (shutdownBegan()) {
       logger.info('CHROMA_SYNC', 'Backfill skipped: worker shutdown began', { project });
       return 'shutdown';
@@ -2041,7 +2097,11 @@ export class ChromaSync {
    * project failed or stopped early, when the sweep stopped for a worker
    * shutdown, or when another sweep was already running.
    */
-  static async backfillAllProjects(store: SessionStore): Promise<boolean> {
+  static backfillAllProjects(store: SessionStore): Promise<boolean> {
+    return runWithSqlScope('chroma:backfillAllProjects', () => ChromaSync.backfillAllProjectsBody(store));
+  }
+
+  private static async backfillAllProjectsBody(store: SessionStore): Promise<boolean> {
     if (ChromaSync.backfillInProgress) {
       logger.info('CHROMA_SYNC', 'Backfill already in progress, skipping duplicate run');
       return false;

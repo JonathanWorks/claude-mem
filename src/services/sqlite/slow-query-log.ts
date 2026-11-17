@@ -1,13 +1,12 @@
 import type { Database, Statement } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
+import { recordSqlBusy } from './sql-scope.js';
+import { summarizeSql } from './sql-text.js';
+import { callersOfSite, captureSite, takeHandedSite } from './stack-source-map.js';
+import { resolveThresholdMsFromEnv } from './threshold-env.js';
 
 export const DEFAULT_SLOW_QUERY_MS = 500;
 
-const SQL_LOG_LIMIT = 300;
-const SQL_SCAN_LIMIT = 4000;
-const CALLER_LOG_LIMIT = 240;
-const OWN_FRAME =
-  /slow-query-log\.(?:ts|js|mjs|cjs)|stream-rows\.(?:ts|js|mjs|cjs)|slowQuery(?:Caller|Timed|Patched|Iterate)|bun:sqlite|node:internal/;
 const STATEMENT_METHODS = ['all', 'get', 'run', 'values'] as const;
 
 export type SlowQueryOp = 'prepare' | 'query' | 'db.run' | 'db.exec' | 'all' | 'get' | 'run' | 'values' | 'iterate';
@@ -18,6 +17,8 @@ export interface SlowQueryContext {
   thresholdMs: number;
   sql: string;
   caller: string;
+  /** The first few application frames, source-mapped when the bundle has a .map file. */
+  callers?: string[];
   /** iterate only: summed ms spent inside the driver producing rows (consumer time excluded). */
   busyMs?: number;
   /** iterate only: wall ms from the first clock read to the iteration ending (consumer time included). */
@@ -37,22 +38,6 @@ export interface SlowQueryLogOptions {
 const instrumentedDatabases = new WeakSet<object>();
 const instrumentedStatements = new WeakSet<object>();
 const statementSql = new WeakMap<object, string>();
-
-export function resolveSlowQueryThresholdMs(raw: string | undefined = process.env.CLAUDE_MEM_SLOW_QUERY_MS): number {
-  if (raw === undefined) return DEFAULT_SLOW_QUERY_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SLOW_QUERY_MS;
-}
-
-function summarizeSql(sql: string): string {
-  return sql.slice(0, SQL_SCAN_LIMIT).replace(/\s+/g, ' ').trim().slice(0, SQL_LOG_LIMIT);
-}
-
-function slowQueryCaller(): string {
-  const frames = (new Error().stack ?? '').split('\n').slice(1);
-  const caller = frames.find(frame => frame.includes('at ') && !OWN_FRAME.test(frame));
-  return caller ? caller.trim().replace(/^at\s+/, '').slice(0, CALLER_LOG_LIMIT) : 'unknown';
-}
 
 function defaultWarn(message: string, context: SlowQueryContext): void {
   logger.warn('DB', message, { ...context });
@@ -74,8 +59,19 @@ function sqlArgument(args: unknown[]): string {
  * producing rows, consumer time excluded) and wallMs (first clock read to the end,
  * consumer time included, so a cursor held open across slow consumer work is
  * visible); it warns when EITHER exceeds the threshold. elapsedMs equals wallMs.
- * Frames inside bun:sqlite, node:internal and stream-rows are skipped when naming
- * the caller, so the frame reported is the application frame that drives the iteration.
+ * The caller is named from a call site taken where the statement enters this module
+ * (`captureSite`, called directly from each patched entry, never through a helper): the
+ * site's first two frames are the capture and the entry, dropped by position, so no
+ * function name is relied on and the minified worker bundle needs none. `streamRows` and
+ * `pageMatchingRows` sit between the application and `iterate`, so they capture their own
+ * site and hand it over (`withHandedSite`): the dropped frames are then the capture and
+ * that helper, and the helper's raw bundle frame is never named as the caller. (The
+ * `.all()` fallback of an old Bun without `iterate` names the helper's frame when no map
+ * is available.) Remaining frames
+ * are resolved through the bundle's .map file when it provably describes the running
+ * bundle (see stack-source-map.ts) and filtered on the mapped source path; without a map
+ * the raw bundle line and column are logged. Every timed statement also adds its busy time
+ * to the active SQL scope (sql-scope.ts).
  * 'abandoned' is reported only when return() runs (a for-of break): an iterator advanced
  * and then dropped without return() never reaches the generator's finally and is not logged.
  * Known blind spots: an iterator that is never advanced logs nothing, and for-of
@@ -86,13 +82,14 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
   if (instrumentedDatabases.has(db)) return db;
   instrumentedDatabases.add(db);
 
-  const thresholdMs = options.thresholdMs ?? resolveSlowQueryThresholdMs();
+  const thresholdMs = options.thresholdMs ?? resolveThresholdMsFromEnv('CLAUDE_MEM_SLOW_QUERY_MS', DEFAULT_SLOW_QUERY_MS);
   const now = options.now ?? (() => performance.now());
   const warn = options.warn ?? defaultWarn;
   let depth = 0;
 
-  function slowQueryTimed<T>(op: SlowQueryOp, sql: () => string, call: () => T): T {
-    if (depth > 0) return call();
+  /** `site` is undefined exactly when the entry was nested inside a timed call (depth > 0): that call is not timed. */
+  function slowQueryTimed<T>(site: Error | undefined, op: SlowQueryOp, source: string | Statement, call: () => T): T {
+    if (!site) return call();
     depth++;
     const startedAt = now();
     try {
@@ -100,14 +97,15 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
     } finally {
       depth--;
       const elapsedMs = now() - startedAt;
+      const sql = typeof source === 'string' ? source : statementSql.get(source) ?? '';
+      recordSqlBusy(sql, elapsedMs, site);
       if (elapsedMs > thresholdMs) {
-        const sqlText = summarizeSql(sql());
         warn(`SLOW_QUERY | op=${op} | ms=${Math.round(elapsedMs)}`, {
           op,
           elapsedMs,
           thresholdMs,
-          sql: sqlText,
-          caller: slowQueryCaller(),
+          sql: summarizeSql(sql),
+          ...callersOfSite(site),
         });
       }
     }
@@ -117,6 +115,7 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
     statement: Statement,
     original: (...args: unknown[]) => Iterable<unknown>,
     args: unknown[],
+    site: Error,
   ): Generator<unknown> {
     let busyMs = 0;
     const startedAt = now();
@@ -141,6 +140,8 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
       }
     } finally {
       const wallMs = now() - startedAt;
+      const sql = statementSql.get(statement) ?? '';
+      recordSqlBusy(sql, busyMs, site);
       if (busyMs > thresholdMs || wallMs > thresholdMs) {
         warn(`SLOW_QUERY | op=iterate | wallMs=${Math.round(wallMs)} | busyMs=${Math.round(busyMs)}`, {
           op: 'iterate',
@@ -148,8 +149,8 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
           busyMs,
           wallMs,
           thresholdMs,
-          sql: summarizeSql(statementSql.get(statement) ?? ''),
-          caller: slowQueryCaller(),
+          sql: summarizeSql(sql),
+          ...callersOfSite(site),
           firstRowMs,
           rows,
         });
@@ -165,13 +166,15 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
       const original = (statement as unknown as Record<string, (...args: unknown[]) => unknown>)[method];
       if (typeof original !== 'function') continue;
       (statement as unknown as Record<string, unknown>)[method] = function slowQueryPatched(...args: unknown[]): unknown {
-        return slowQueryTimed(method, () => statementSql.get(statement) ?? '', () => original.apply(statement, args));
+        const site = depth === 0 ? captureSite() : undefined;
+        return slowQueryTimed(site, method, statement, () => original.apply(statement, args));
       };
     }
     const iterate = (statement as unknown as Record<string, unknown>).iterate;
     if (typeof iterate === 'function') {
       (statement as unknown as Record<string, unknown>).iterate = function slowQueryPatched(...args: unknown[]): unknown {
-        return slowQueryIterate(statement, iterate as (...a: unknown[]) => Iterable<unknown>, args);
+        const site = takeHandedSite() ?? captureSite();
+        return slowQueryIterate(statement, iterate as (...a: unknown[]) => Iterable<unknown>, args, site);
       };
     }
     return statement;
@@ -188,7 +191,8 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
     if (typeof original !== 'function') continue;
     patchable[method] = function slowQueryPatched(...args: unknown[]): unknown {
       const sql = sqlArgument(args);
-      const result = slowQueryTimed(op, () => sql, () => original.apply(db, args));
+      const site = depth === 0 ? captureSite() : undefined;
+      const result = slowQueryTimed(site, op, sql, () => original.apply(db, args));
       return producesStatement ? instrumentStatement(result as Statement, sql) : result;
     };
   }

@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logger.js';
+import { captureSite, withHandedSite } from './stack-source-map.js';
 
 /** The part of a bun:sqlite prepared statement these helpers read rows through. */
 interface RowStatement {
@@ -26,7 +27,23 @@ let warnedMissingIterate = false;
  * TypeError.
  */
 export function streamRows(statement: RowStatement, ...params: any[]): Iterable<unknown> {
-  if (typeof statement.iterate === 'function') return statement.iterate(...params);
+  const site = captureSite();
+  return iterateRows(site, statement, params);
+}
+
+/**
+ * `site` was captured by the public entry that called this (`streamRows` or
+ * `pageMatchingRows`) and is handed to the slow-query instrumentation, so the caller it
+ * names is that entry's caller whether or not a source map is available.
+ */
+function iterateRows(site: Error, statement: RowStatement, params: any[]): Iterable<unknown> {
+  if (typeof statement.iterate === 'function') {
+    const iterate = statement.iterate;
+    return withHandedSite(site, () => iterate.apply(statement, params));
+  }
+  // Unreachable on a supported runtime: package.json engines pins bun >= 1.1.31, which has
+  // Statement.iterate. Only an unsupported older Bun reaches this fallback, where the slow-query
+  // caller names this helper frame rather than the real caller.
   if (!warnedMissingIterate) {
     warnedMissingIterate = true;
     logger.warn('DB', 'bun:sqlite lacks Statement.iterate(); falling back to .all()', {
@@ -55,6 +72,7 @@ export function pageMatchingRows<T>(
   matches: (row: T) => boolean,
   page: { limit: unknown; offset?: unknown },
 ): T[] {
+  const site = captureSite();
   try {
     const limit = Number(page.limit);
     if (!Number.isInteger(limit) || limit < 0) {
@@ -68,7 +86,7 @@ export function pageMatchingRows<T>(
     if (limit === 0) return rows;
     // A negative offset reads from the start, as SQLite's OFFSET does.
     let toSkip = Math.max(0, offset);
-    for (const row of streamRows(statement, ...params) as Iterable<T>) {
+    for (const row of iterateRows(site, statement, params) as Iterable<T>) {
       if (!matches(row)) continue;
       if (toSkip > 0) {
         toSkip--;

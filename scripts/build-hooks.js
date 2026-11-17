@@ -2,6 +2,7 @@
 
 import { build } from 'esbuild';
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import path from 'path';
 import vm from 'node:vm';
 import { isDeepStrictEqual } from 'node:util';
@@ -69,6 +70,20 @@ function assertBundleIntegrity(filePath) {
       `${filePath} inlined the absolute build path ${leaked}…: a __dirname/__filename literal leaked. Check the esbuild \`define\` mapping.`
     );
   }
+  stampSourceMapIdentity(filePath);
+}
+
+// Binds each source map to the bytes it describes. The runtime
+// (src/services/sqlite/stack-source-map.ts, SOURCE_MAP_IDENTITY_KEY) uses a map
+// only when this identity equals the size and sha256 of the bundle the process
+// loaded; a map synced from another build, with any mtime, is then ignored.
+export function stampSourceMapIdentity(filePath) {
+  const mapPath = `${filePath}.map`;
+  if (!fs.existsSync(mapPath)) return;
+  const bundle = fs.readFileSync(filePath);
+  const map = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
+  map.x_claudeMemBundle = { size: bundle.length, sha256: createHash('sha256').update(bundle).digest('hex') };
+  fs.writeFileSync(mapPath, JSON.stringify(map));
 }
 
 const WORKER_SERVICE = {

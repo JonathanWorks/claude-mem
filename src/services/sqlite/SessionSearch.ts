@@ -1,4 +1,5 @@
-import { Database, type Statement } from 'bun:sqlite';
+import type { Database, Statement } from 'bun:sqlite';
+import { instrumentOrOpen } from './open-database.js';
 import { TableNameRow } from '../../types/database.js';
 import { DATA_DIR, DB_PATH, ensureDir } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -111,12 +112,8 @@ export class SessionSearch {
    * fts5vocab term-frequency tables) still work on a read-only open.
    */
   constructor(dbPathOrDb: string | Database = DB_PATH, options: { readOnly?: boolean } = {}) {
-    if (dbPathOrDb instanceof Database) {
-      this.db = dbPathOrDb;
-    } else {
-      ensureDir(DATA_DIR);
-      this.db = new Database(dbPathOrDb);
-    }
+    if (typeof dbPathOrDb === 'string') ensureDir(DATA_DIR);
+    this.db = instrumentOrOpen(dbPathOrDb);
 
     // Refuse before any DDL when the database's schema is newer than this
     // binary's chain (#3609 step 2); a refused open touches nothing.

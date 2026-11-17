@@ -5,7 +5,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rena
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../../../sqlite/open-database.js';
 import { CLAUDE_CONFIG_DIR, DATA_DIR, DB_PATH, getPackageRoot, USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { onContextInvalidation } from '../../../../shared/context-invalidation.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
@@ -353,7 +354,7 @@ export function configuredHumanCopyProvider(settingsPath = USER_SETTINGS_PATH): 
 export function defaultAutoRefresh(ledgerDir: string, settingsPath = USER_SETTINGS_PATH, setupPath = setupStatePath(), setupActive = () => false,
   localDeviceId: () => string, saveFocus: (body: RouterFocusBody) => { placed: number; focusAreaIds: string[] }): AutoRefreshWorker {
   const openDatabase = () => {
-    const database = new Database(DB_PATH, { readonly: true, create: false });
+    const database = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
     database.exec('PRAGMA busy_timeout = 1500');
     return database;
   };
@@ -601,7 +602,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
   /** This machine's own observations, for the import offer. A missing database is a new install: nothing to import. */
   private historyCounts(): { projects: number; sessions: number; observations: number } | null {
     if (!existsSync(this.databasePath)) return { projects: 0, sessions: 0, observations: 0 };
-    const database = new Database(this.databasePath, { readonly: true, create: false });
+    const database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
     try { return readHistoryCounts(database); }
     finally { database.close(); }
   }
@@ -736,7 +737,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
         if (!conversationsOf.has(groupId)) conversationsOf.set(groupId, []);
         conversationsOf.get(groupId)!.push([platform, contentSessionId]);
       }
-      const database = existsSync(this.databasePath) ? new Database(this.databasePath, { readonly: true, create: false }) : null;
+      const database = existsSync(this.databasePath) ? openSqliteDatabase(this.databasePath, { readonly: true, create: false }) : null;
       try {
         const lastPrompt = database?.prepare(`SELECT MAX(up.created_at_epoch) AS at FROM user_prompts up JOIN sdk_sessions s ON s.id = up.session_db_id
           WHERE s.platform_source = ? AND s.content_session_id = ?`);
@@ -963,7 +964,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     const served = existsSync(this.databasePath) ? realpathSync(this.databasePath) : this.databasePath;
     const expected = existsSync(body.databasePath) ? realpathSync(body.databasePath) : body.databasePath;
     if (served !== expected) { res.status(409).json({ error: `This worker serves ${served}, not ${expected}. Nothing was written.` }); return; }
-    const database = new Database(this.databasePath, { readonly: true, create: false });
+    const database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
     let planned: ReturnType<typeof seedFocusRows> | ReturnType<typeof seedUndoRows>;
     try {
       const focus = readFocus(database, { localDeviceId: this.getLocalDeviceId() });
@@ -1032,7 +1033,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     const { conversationKey, action } = req.body as z.infer<typeof suggestionBody>;
     if (!this.ledgerDir) { res.status(503).json({ error: 'Request suggestions are unavailable on this worker.' }); return; }
     if (!existsSync(this.databasePath)) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before answering a suggestion.' }); return; }
-    const database = new Database(this.databasePath, { readonly: true, create: false });
+    const database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
     let outcome: ReturnType<typeof decideSuggestion>;
     try { outcome = decideSuggestion({ dir: this.ledgerDir, database, conversationKey, action, now: Date.now() }); }
     finally { database.close(); }

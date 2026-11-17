@@ -1,5 +1,5 @@
 // Bun's native SQLite reader; source data is never opened for writing.
-import { Database as DatabaseSync } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -82,7 +82,7 @@ export class WorkStateSource {
     const identity = `${stat.dev}:${stat.ino}`;
     if (!this.database || identity !== this.databaseIdentity) {
       this.close();
-      this.database = new DatabaseSync(this.databasePath, { readonly: true, create: false });
+      this.database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
       this.database.exec('PRAGMA query_only = ON');
       this.database.exec('PRAGMA busy_timeout = 1500');
       this.columns = new Set(this.database.prepare('PRAGMA table_info(work_state_entries)').all().map(column => column.name));

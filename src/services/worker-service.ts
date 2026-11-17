@@ -21,6 +21,7 @@ import { logger } from '../utils/logger.js';
 import { ChromaMcpManager } from './sync/ChromaMcpManager.js';
 import { ChromaSync } from './sync/ChromaSync.js';
 import { openConfiguredSqliteDatabase } from './sqlite/connection.js';
+import { startEventLoopLagMonitor } from './sqlite/event-loop-lag.js';
 import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } from '../supervisor/index.js';
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 import { setRegistryDegradedReporter } from '../supervisor/process-registry.js';
@@ -683,6 +684,9 @@ export class WorkerService implements WorkerRef {
       });
       process.exit(WORKER_BOOT_FAILED_EXIT_CODE);
     }, BOOT_BIND_DEADLINE_MS);
+
+    // Names the SQL that ran during any event-loop stall over 1 s; unref'd, started once.
+    startEventLoopLagMonitor();
 
     // Must run before startSupervisor(): its validateWorkerPidFile() removes
     // the dead previous run's stale PID file, which crash detection needs.

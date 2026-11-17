@@ -1,6 +1,6 @@
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from './open-database.js';
 import { logger } from '../../utils/logger.js';
-import { instrumentSlowQueries } from './slow-query-log.js';
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 4194304;
@@ -141,7 +141,7 @@ export function openConfiguredSqliteDatabase(
   options?: DatabaseOptions,
   pragmas?: SqlitePragmaOptions,
 ): Database {
-  const db = new Database(dbPath, options);
+  const db = openSqliteDatabase(dbPath, options);
   applySqliteConnectionPragmas(db, pragmas);
   return db;
 }
@@ -154,8 +154,8 @@ export function openConfiguredSqliteDatabase(
  * DELETE-mode file converted to WAL.
  */
 export function openGuardedSqliteDatabase(dbPath: string): Database {
-  const db = new Database(dbPath);
+  const db = openSqliteDatabase(dbPath);
   assertSchemaWriterCompatible(db, LATEST_SCHEMA_VERSION);
   applySqliteConnectionPragmas(db);
-  return instrumentSlowQueries(db);
+  return db;
 }

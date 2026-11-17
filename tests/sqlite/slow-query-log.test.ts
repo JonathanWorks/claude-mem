@@ -2,11 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
 import {
-  DEFAULT_SLOW_QUERY_MS,
   instrumentSlowQueries,
-  resolveSlowQueryThresholdMs,
   type SlowQueryContext,
 } from '../../src/services/sqlite/slow-query-log.js';
+import { runWithSqlScope, type SlowRequestContext } from '../../src/services/sqlite/sql-scope.js';
 import { pageMatchingRows, streamRows } from '../../src/services/sqlite/stream-rows.js';
 
 /** Each timed call reads the clock twice; its elapsed time is the next queued duration (default 0). */
@@ -93,6 +92,41 @@ describe('slow statement log', () => {
     expect(context.sql).not.toMatch(/\s{2}|\n/);
     expect(context.sql.startsWith('SELECT id AS column_number_0, id AS column_number_1')).toBe(true);
     expect(context.caller).toContain('slow-query-log.test.ts');
+  });
+
+  it('lists the application frames in callers and keeps the logging modules out of them', () => {
+    instrument([900]);
+    db.prepare('SELECT id FROM items');
+    const [{ context }] = warnings;
+    expect(context.callers?.[0]).toBe(context.caller);
+    expect(context.callers?.join('\n')).toContain('slow-query-log.test');
+    expect(context.callers?.join('\n')).not.toMatch(/src\/services\/sqlite\/(?:slow-query-log|sql-scope|stack-source-map)/);
+  });
+
+  it('counts a slow statement and its siblings toward the enclosing SQL scope', () => {
+    instrument([900, 40, 40]);
+    const scoped: SlowRequestContext[] = [];
+    runWithSqlScope('slow-test', () => {
+      db.run('SELECT 1');
+      db.run('SELECT 2');
+      db.run('SELECT 3');
+    }, { thresholdMs: 500, warn: (_message, context) => scoped.push(context) });
+    expect(warnings).toHaveLength(1);
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].statements).toBe(3);
+    expect(scoped[0].sqlMs).toBe(980);
+    expect(scoped[0].maxStatementMs).toBe(900);
+  });
+
+  it('counts an iterate toward the scope', () => {
+    db.run("INSERT INTO items (body) VALUES ('a')");
+    instrument([]);
+    const scoped: SlowRequestContext[] = [];
+    runWithSqlScope('iterate-test', () => {
+      for (const _row of db.query('SELECT id FROM items').iterate()) void _row;
+    }, { thresholdMs: -1, warn: (_message, context) => scoped.push(context) });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].top.map(entry => entry.sql)).toContain('SELECT id FROM items');
   });
 
   it('never puts a bound parameter in the message or the context', () => {
@@ -254,19 +288,5 @@ describe('slow statement log', () => {
     db.run('INSERT INTO items (body) VALUES (?)', ['one']);
     expect(db.prepare('SELECT body FROM items').all()).toEqual([{ body: 'one' }]);
     expect(db.query('SELECT body FROM items').values()).toEqual([['one']]);
-  });
-});
-
-describe('slow statement threshold', () => {
-  it('defaults to 500 ms for a missing, invalid or non-positive value', () => {
-    for (const raw of [undefined, 'abc', '-1', '0', '', 'Infinity']) {
-      expect(resolveSlowQueryThresholdMs(raw)).toBe(DEFAULT_SLOW_QUERY_MS);
-    }
-    expect(DEFAULT_SLOW_QUERY_MS).toBe(500);
-  });
-
-  it('reads a positive number of milliseconds', () => {
-    expect(resolveSlowQueryThresholdMs('750')).toBe(750);
-    expect(resolveSlowQueryThresholdMs('0.5')).toBe(0.5);
   });
 });

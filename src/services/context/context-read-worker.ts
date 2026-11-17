@@ -1,4 +1,5 @@
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { parentPort } from 'node:worker_threads';
 import { DB_PATH } from '../../shared/paths.js';
 import { getProjectContext } from '../../utils/project-name.js';
@@ -16,7 +17,7 @@ if (!parentPort) throw new Error('Context reader requires a worker thread');
 const port = parentPort;
 
 function readDatabase<T>(read: (db: Database) => T): T {
-  const db = new Database(DB_PATH, { readonly: true, create: false });
+  const db = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
   try {
     db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     db.run('PRAGMA query_only = ON');
@@ -39,7 +40,7 @@ let keywordSearch: SessionSearch | null = null;
 
 function keywordSearchReader(): SessionSearch {
   if (keywordSearch) return keywordSearch;
-  const db = new Database(DB_PATH, { readonly: true, create: false });
+  const db = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
   try {
     db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     keywordSearch = new SessionSearch(db, { readOnly: true });

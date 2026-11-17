@@ -2,14 +2,14 @@
 import path from 'path';
 import { homedir } from 'os';
 import { statSync, unlinkSync } from 'fs';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { getProjectContext } from '../../utils/project-name.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../sqlite/connection.js';
 import { projectReadKeys } from '../sqlite/project-read-keys.js';
-import { instrumentSlowQueries } from '../sqlite/slow-query-log.js';
 
 import type { ContextInput, ContextConfig, Observation, SessionSummary } from './types.js';
 import { colors } from './types.js';
@@ -68,7 +68,7 @@ const VERSION_MARKER_PATH = path.join(
 
 function initializeDatabase(): Database | null {
   try {
-    const db = new Database(DB_PATH, { readonly: true, create: false });
+    const db = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
     try {
       db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
       return db;
@@ -145,7 +145,6 @@ function acquireContextReadConnection(): ContextReadConnection | null {
   closeContextReadConnection();
   const db = initializeDatabase();
   if (!db) return null;
-  instrumentSlowQueries(db);
   contextReadConnection = { db, statements: new ContextStatementCache(db), identity };
   return contextReadConnection;
 }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, unwatchFile, watchFile } from 'fs';
 import path from 'path';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { readJsonFileWithBom } from '../../shared/atomic-json.js';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { DB_PATH, USER_SETTINGS_PATH } from '../../shared/paths.js';
@@ -188,7 +189,7 @@ export function resolveIndexSeats(cfg: GrokBotIndexConfig): GrokBotIndexSeat[] {
 function openReadonlyObservationDb(): Database | null {
   try {
     if (!existsSync(DB_PATH)) return null;
-    const db = new Database(DB_PATH, { readonly: true, create: false });
+    const db = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
     db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     return db;
   } catch (error) {

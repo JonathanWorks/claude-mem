@@ -805,8 +805,8 @@ export async function adoptMergedWorktreesForAllKnownRepos(opts: {
   let recordedCwds: string[] = [];
   let db: import('bun:sqlite').Database | null = null;
   try {
-    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
-    db = new Database(dbPath, { readonly: true });
+    const { openSqliteDatabase } = require('../sqlite/open-database.js') as typeof import('../sqlite/open-database.js');
+    db = openSqliteDatabase(dbPath, { readonly: true });
 
     // Discovery reads sdk_sessions.cwd; pending_messages stopped receiving
     // writes in v13.10.0 and is UNIONed only for rows still on disk (#2864).

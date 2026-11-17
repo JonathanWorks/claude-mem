@@ -53,6 +53,9 @@ const EXCLUDED_PATTERNS = [
   /worker\/session\/abort-reason\.ts$/,  // Pure abort-category authority (enum + preserve set); exits are logged by the handler and runner (#3475)
   /worker\/session\/tier-routing\.ts$/,  // Pure simple-tier tool predicate; the tier choice and the boundary switch are logged by SessionRoutes and SessionManager (#4963)
   /worker\/TimelineService\.ts$/,  // Pure filterByDepth helper after dead-code removal; no side effects (mirrors FallbackErrorHandler)
+  /sqlite\/open-database\.ts$/,  // The one sanctioned Database constructor: no failure path of its own, the callers log; failures throw
+  /sqlite\/sql-text\.ts$/,  // Pure SQL-text summarizer shared by the slow-query and scope logs; no side effects or failure path
+  /sqlite\/threshold-env\.ts$/,  // Pure env-to-milliseconds parse shared by the three SQL diagnostics; an invalid value falls back by design, so there is no failure path to log
   /sqlite\/project-read-keys\.ts$/,  // Pure project-scope SQL builders plus one read query; logging happens at the search/context call sites
   /servers\/checkout-search-scope\.ts$/,  // Pure MCP search-args transform; no side effects or error paths
   /sync\/prompt-text-clamp\.ts$/,  // Pure prompt_text bound (SQL column fragment + clamp); CloudSync logs and quarantines at the drain (#3537)

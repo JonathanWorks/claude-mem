@@ -323,9 +323,9 @@ export function runOneTimeCwdRemap(dataDirectory?: string): void {
 }
 
 function executeCwdRemap(dbPath: string, effectiveDataDir: string, markerPath: string): void {
-  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
+  const { openSqliteDatabase } = require('../sqlite/open-database.js') as typeof import('../sqlite/open-database.js');
 
-  const probe = new Database(dbPath, { readonly: true });
+  const probe = openSqliteDatabase(dbPath, { readonly: true });
   const hasPending = probe.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_messages'"
   ).get() as { name: string } | undefined;
@@ -343,7 +343,7 @@ function executeCwdRemap(dbPath: string, effectiveDataDir: string, markerPath: s
   logger.info('SYSTEM', 'DB backed up before cwd-remap', { backup });
 
   const { applySqliteConnectionPragmas } = require('../sqlite/connection.js') as typeof import('../sqlite/connection.js');
-  const db = new Database(dbPath);
+  const db = openSqliteDatabase(dbPath);
   applySqliteConnectionPragmas(db);
   try {
     const cwdRows = db.prepare(`

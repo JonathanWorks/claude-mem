@@ -1,5 +1,6 @@
 import { emitContextInvalidation } from '../../shared/context-invalidation.js';
-import { Database, type SQLQueryBindings, type Statement } from 'bun:sqlite';
+import type { Database, SQLQueryBindings, Statement } from 'bun:sqlite';
+import { instrumentOrOpen } from './open-database.js';
 import { createHash, randomUUID } from 'crypto';
 import { DATA_DIR, DB_PATH, ensureDir, OBSERVER_SESSIONS_PROJECT, USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -247,14 +248,8 @@ export class SessionStore {
 
   constructor(dbPathOrDb: string | Database = DB_PATH, options: SessionStoreOptions = {}) {
     this.syncOpsEnabled = options.syncOpsEnabled ?? true;
-    if (dbPathOrDb instanceof Database) {
-      this.db = dbPathOrDb;
-    } else {
-      if (dbPathOrDb !== ':memory:') {
-        ensureDir(DATA_DIR);
-      }
-      this.db = new Database(dbPathOrDb);
-    }
+    if (typeof dbPathOrDb === 'string' && dbPathOrDb !== ':memory:') ensureDir(DATA_DIR);
+    this.db = instrumentOrOpen(dbPathOrDb);
 
     // Refuse before any DDL — pragmas included — when the database's schema
     // is newer than this binary's chain (#3609 step 2); a refused open

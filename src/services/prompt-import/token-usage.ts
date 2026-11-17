@@ -26,7 +26,8 @@
  * through calculateTokenEconomics; with no observations it is omitted.
  */
 
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { basename, dirname, join } from 'path';
@@ -193,7 +194,7 @@ const openCodeUsage: UsageReader = {
   async read(sources, sinceEpochMs, usage, skip) {
     for (const source of sources) {
       try {
-        const database = new Database(source.path, { readonly: true });
+        const database = openSqliteDatabase(source.path, { readonly: true });
         try {
           const rows = database.prepare(`SELECT time_created AS createdAt, json_extract(data, '$.tokens') AS tokens
             FROM message WHERE json_extract(data, '$.role') = 'assistant'`).all() as Array<{ createdAt: number; tokens: string | null }>;
