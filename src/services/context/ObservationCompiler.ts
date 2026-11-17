@@ -1,7 +1,7 @@
 
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import type { Database } from 'bun:sqlite';
+import type { Database, Statement } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
 import { stripSystemReminderBlocks } from '../../utils/tag-stripping.js';
 import { CLAUDE_CONFIG_DIR } from '../../shared/paths.js';
@@ -19,7 +19,62 @@ import type {
 } from './types.js';
 import { SUMMARY_LOOKAHEAD } from './types.js';
 
-type DatabaseOwner = { db: Database };
+const STATEMENT_CACHE_CAPACITY = 16;
+
+/**
+ * Prepared statements keyed by their exact SQL text, least recently used
+ * evicted (and finalized) past `capacity`. The SQL text carries the key count
+ * and filter shape; keys and filters stay bound parameters, so a cached
+ * statement can only be reused for the same shape.
+ */
+export class ContextStatementCache {
+  readonly #db: Database;
+  readonly #capacity: number;
+  readonly #statements = new Map<string, Statement>();
+
+  constructor(db: Database, capacity: number = STATEMENT_CACHE_CAPACITY) {
+    this.#db = db;
+    this.#capacity = Math.max(1, capacity);
+  }
+
+  get size(): number {
+    return this.#statements.size;
+  }
+
+  prepare(sql: string): Statement {
+    const cached = this.#statements.get(sql);
+    if (cached) {
+      this.#statements.delete(sql);
+      this.#statements.set(sql, cached);
+      return cached;
+    }
+    const statement = this.#db.prepare(sql);
+    this.#statements.set(sql, statement);
+    while (this.#statements.size > this.#capacity) {
+      const [oldestSql, oldest] = this.#statements.entries().next().value as [string, Statement];
+      this.#statements.delete(oldestSql);
+      oldest.finalize();
+    }
+    return statement;
+  }
+
+  finalizeAll(): void {
+    for (const statement of this.#statements.values()) statement.finalize();
+    this.#statements.clear();
+  }
+}
+
+type DatabaseOwner = { db: Database; statements?: ContextStatementCache };
+
+function runAll<T>(owner: DatabaseOwner, sql: string, params: unknown[]): T[] {
+  if (owner.statements) return owner.statements.prepare(sql).all(...(params as never[])) as T[];
+  const statement = owner.db.prepare(sql);
+  try {
+    return statement.all(...(params as never[])) as T[];
+  } finally {
+    statement.finalize();
+  }
+}
 
 const OBSERVATION_SELECT = `
       o.id,
@@ -165,7 +220,7 @@ export function queryObservationsNewest(
   ];
 
   if (projects.length === 0) {
-    const statement = db.db.prepare(`
+    return runAll<LocalObservation>(db, `
       SELECT
         ${OBSERVATION_SELECT}${reinforcementColumn}
       FROM observations o
@@ -173,12 +228,7 @@ export function queryObservationsNewest(
       WHERE ${filterSql}
       ORDER BY o.created_at_epoch DESC
       LIMIT ?
-    `);
-    try {
-      return statement.all(...filterParams, options.limit) as LocalObservation[];
-    } finally {
-      statement.finalize();
-    }
+    `, [...filterParams, options.limit]);
   }
 
   const winnersSql = newestIdsPerProjectKeySql('o', projects.length, keyPredicate => `
@@ -191,19 +241,14 @@ export function queryObservationsNewest(
   const perKeyParams = PROJECT_KEY_COLUMNS.flatMap(() =>
     projects.flatMap(project => [project, ...filterParams, options.limit]));
 
-  const statement = db.db.prepare(`
+  return runAll<LocalObservation>(db, `
     SELECT
       ${OBSERVATION_SELECT}${reinforcementColumn}
     FROM (${winnersSql}) w
     JOIN observations o ON o.id = w.id
     LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
     ORDER BY o.created_at_epoch DESC
-  `);
-  try {
-    return statement.all(...perKeyParams, options.limit) as LocalObservation[];
-  } finally {
-    statement.finalize();
-  }
+  `, [...perKeyParams, options.limit]);
 }
 
 export function countObservationsByProjects(db: DatabaseOwner, projects: string[], platformSource?: string): number {
@@ -252,7 +297,7 @@ export function querySummariesMulti(
   const perKeyParams = PROJECT_KEY_COLUMNS.flatMap(() =>
     projects.flatMap(project => [project, ...platformParams, limit]));
 
-  const statement = db.db.prepare(`
+  return runAll<LocalSessionSummary>(db, `
     SELECT
       ss.id,
       ss.memory_session_id,
@@ -270,12 +315,7 @@ export function querySummariesMulti(
     JOIN session_summaries ss ON ss.id = w.id
     LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
     ORDER BY ss.created_at_epoch DESC
-  `);
-  try {
-    return statement.all(...perKeyParams, limit) as LocalSessionSummary[];
-  } finally {
-    statement.finalize();
-  }
+  `, [...perKeyParams, limit]);
 }
 
 /** Claude Code cuts a longer encoded project directory name to this length and appends a hash. */

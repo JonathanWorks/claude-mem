@@ -1,7 +1,7 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { existsSync, unlinkSync } from 'fs';
+import { statSync, unlinkSync } from 'fs';
 import { Database } from 'bun:sqlite';
 import { DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -9,6 +9,7 @@ import { getProjectContext } from '../../utils/project-name.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import { SQLITE_BUSY_TIMEOUT_MS } from '../sqlite/connection.js';
 import { projectReadKeys } from '../sqlite/project-read-keys.js';
+import { instrumentSlowQueries } from '../sqlite/slow-query-log.js';
 
 import type { ContextInput, ContextConfig, Observation, SessionSummary } from './types.js';
 import { colors } from './types.js';
@@ -16,6 +17,7 @@ import { loadContextConfig } from './ContextConfigLoader.js';
 import { fitContextToBudget, CONTEXT_OUTPUT_LIMIT, TERMINAL_BANNER_RESERVE_CHARS } from './ContextBudget.js';
 import { calculateTokenEconomics } from './TokenCalculator.js';
 import {
+  ContextStatementCache,
   queryObservationsMulti,
   querySummariesMulti,
   getPriorSessionMessages,
@@ -66,7 +68,6 @@ const VERSION_MARKER_PATH = path.join(
 
 function initializeDatabase(): Database | null {
   try {
-    if (!existsSync(DB_PATH)) return null;
     const db = new Database(DB_PATH, { readonly: true, create: false });
     try {
       db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
@@ -91,6 +92,62 @@ function initializeDatabase(): Database | null {
     }
     throw error;
   }
+}
+
+interface ContextReadConnection {
+  db: Database;
+  statements: ContextStatementCache;
+  identity: string;
+}
+
+let contextReadConnection: ContextReadConnection | null = null;
+
+function databaseFileIdentity(): string | null {
+  try {
+    const stats = statSync(DB_PATH);
+    return `${stats.dev}:${stats.ino}:${stats.birthtimeMs}`;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * Drop this thread's cached read connection and its prepared statements. The
+ * next context read opens a fresh one.
+ */
+export function closeContextReadConnection(): void {
+  const connection = contextReadConnection;
+  contextReadConnection = null;
+  if (!connection) return;
+  try {
+    connection.statements.finalizeAll();
+    connection.db.close();
+  } catch (error: unknown) {
+    logger.warn('DB', 'Closing the context read connection failed', { error: String(error) });
+  }
+}
+
+/**
+ * One read-only connection per thread, kept across calls so the prepared
+ * 282-arm UNION statements are compiled once instead of on every read. The
+ * file's identity is checked on each call: a missing file returns null
+ * without creating it, and a replaced file (restore, delete and recreate)
+ * gets a fresh connection.
+ */
+function acquireContextReadConnection(): ContextReadConnection | null {
+  const identity = databaseFileIdentity();
+  if (identity === null) {
+    closeContextReadConnection();
+    return null;
+  }
+  if (contextReadConnection?.identity === identity) return contextReadConnection;
+  closeContextReadConnection();
+  const db = initializeDatabase();
+  if (!db) return null;
+  instrumentSlowQueries(db);
+  contextReadConnection = { db, statements: new ContextStatementCache(db), identity };
+  return contextReadConnection;
 }
 
 function renderEmptyState(project: string, forHuman: boolean, headerTime: string): string {
@@ -584,22 +641,26 @@ export async function generateContextWithStats(
   }
 
   const scope = resolveContextScope(input, options.config);
-  const rawDb = initializeDatabase();
-  if (!rawDb) {
+  const connection = acquireContextReadConnection();
+  if (!connection) {
     return { text: healthWarningForContext(input, forHuman), stats: null };
   }
 
+  let observations: ReturnType<typeof queryObservationsMulti>;
+  let summaries: ReturnType<typeof querySummariesMulti>;
+  let queryProjects: string[];
   try {
-    const db = { db: rawDb };
+    const db = { db: connection.db, statements: connection.statements };
     // Every key these projects are stored under, including one hop of a merge
     // chain, so a `project merge` brings the merged project's adopted rows along.
-    const queryProjects = projectReadKeys(rawDb, scope.projects.length > 1 ? scope.projects : [scope.project]);
-    const observations = queryObservationsMulti(db, queryProjects, scope.config, scope.platformSource);
-    const summaries = querySummariesMulti(db, queryProjects, scope.config, scope.platformSource);
-    return { ...renderContextFromRows({ observations, summaries }, input, forHuman, scope), readKeys: queryProjects };
-  } finally {
-    rawDb.close();
+    queryProjects = projectReadKeys(connection.db, scope.projects.length > 1 ? scope.projects : [scope.project]);
+    observations = queryObservationsMulti(db, queryProjects, scope.config, scope.platformSource);
+    summaries = querySummariesMulti(db, queryProjects, scope.config, scope.platformSource);
+  } catch (error: unknown) {
+    closeContextReadConnection();
+    throw error;
   }
+  return { ...renderContextFromRows({ observations, summaries }, input, forHuman, scope), readKeys: queryProjects };
 }
 
 export async function generateContext(

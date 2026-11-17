@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
+import { instrumentSlowQueries } from './slow-query-log.js';
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 4194304;
@@ -156,5 +157,5 @@ export function openGuardedSqliteDatabase(dbPath: string): Database {
   const db = new Database(dbPath);
   assertSchemaWriterCompatible(db, LATEST_SCHEMA_VERSION);
   applySqliteConnectionPragmas(db);
-  return db;
+  return instrumentSlowQueries(db);
 }

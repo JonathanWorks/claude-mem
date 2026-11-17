@@ -388,6 +388,60 @@ export function countOwedToolUseSummaries(db: Database): number {
   return row.owed;
 }
 
+const OWED_SCAN_PAGE = 500;
+const OWED_ID_CHUNK = 500;
+
+interface OwedCandidate {
+  id: number;
+  tool_use_id: string;
+  summary_attempts: number;
+}
+
+function owedCap(limit: number | undefined): number {
+  return limit === undefined || !Number.isFinite(limit) ? Infinity : Math.ceil(limit);
+}
+
+function selectOwedIds(
+  db: Database,
+  params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string> },
+  cap: number
+): { chosen: number[]; parkIds: number[] } {
+  const pageSize = cap === Infinity ? OWED_SCAN_PAGE : cap + params.heldToolUseIds.size;
+  const page = db.prepare(`
+    SELECT id, tool_use_id, summary_attempts FROM tool_uses INDEXED BY idx_tool_uses_summary_owed
+    WHERE session_db_id = ? AND summary_state = 'pending' AND id > ?
+    ORDER BY id ASC
+    LIMIT ?
+  `);
+  const chosen: number[] = [];
+  const parkIds: number[] = [];
+  let afterId = 0;
+  for (;;) {
+    const candidates = page.all(params.sessionDbId, afterId, pageSize) as OwedCandidate[];
+    for (const candidate of candidates) {
+      afterId = candidate.id;
+      if (params.heldToolUseIds.has(candidate.tool_use_id)) continue;
+      if (candidate.summary_attempts >= MAX_SUMMARY_ATTEMPTS) {
+        parkIds.push(candidate.id);
+        continue;
+      }
+      chosen.push(candidate.id);
+      if (chosen.length >= cap) return { chosen, parkIds };
+    }
+    if (candidates.length < pageSize) return { chosen, parkIds };
+  }
+}
+
+function loadToolUseRows(db: Database, ids: number[]): ToolUseRow[] {
+  const rows: ToolUseRow[] = [];
+  for (let offset = 0; offset < ids.length; offset += OWED_ID_CHUNK) {
+    const chunk = ids.slice(offset, offset + OWED_ID_CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    rows.push(...(db.prepare(`SELECT * FROM tool_uses WHERE id IN (${placeholders}) ORDER BY id ASC`).all(...chunk) as ToolUseRow[]));
+  }
+  return rows;
+}
+
 /**
  * Take a session's `pending` rows for a replay, oldest first, skipping the
  * ones the caller already holds. Each row taken counts one attempt; a row that
@@ -404,29 +458,16 @@ export function takeOwedToolUses(
   params: { sessionDbId: number; heldToolUseIds: ReadonlySet<string>; limit?: number; nowEpoch?: number }
 ): { rows: ToolUseRow[]; parked: number } {
   const nowEpoch = params.nowEpoch ?? Date.now();
+  const cap = owedCap(params.limit);
+  if (cap <= 0) return { rows: [], parked: 0 };
   return db.transaction(() => {
-    const owed = (db.prepare(`
-      SELECT * FROM tool_uses
-      WHERE session_db_id = ? AND summary_state = 'pending'
-      ORDER BY id ASC
-    `).all(params.sessionDbId) as Array<ToolUseRow & { summary_attempts: number }>)
-      .filter(row => !params.heldToolUseIds.has(row.tool_use_id));
-
+    const { chosen, parkIds } = selectOwedIds(db, params, cap);
+    const rows = loadToolUseRows(db, chosen);
     const park = db.prepare(`UPDATE tool_uses SET summary_state = 'parked', summary_state_epoch = ? WHERE id = ?`);
+    for (const id of parkIds) park.run(nowEpoch, id);
     const attempt = db.prepare('UPDATE tool_uses SET summary_attempts = summary_attempts + 1 WHERE id = ?');
-    const rows: ToolUseRow[] = [];
-    let parked = 0;
-    for (const row of owed) {
-      if (params.limit !== undefined && rows.length >= params.limit) break;
-      if (row.summary_attempts >= MAX_SUMMARY_ATTEMPTS) {
-        park.run(nowEpoch, row.id);
-        parked++;
-        continue;
-      }
-      attempt.run(row.id);
-      rows.push(row);
-    }
-    return { rows, parked };
+    for (const id of chosen) attempt.run(id);
+    return { rows, parked: parkIds.length };
   }).immediate();
 }
 

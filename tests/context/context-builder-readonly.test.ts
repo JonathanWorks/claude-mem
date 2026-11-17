@@ -157,7 +157,7 @@ function runChild(dataDir: string, extraEnv: Record<string, string>): Record<str
 }
 
 describe('context database ownership', () => {
-  it('releases all query statements on repeated read-only context renders', () => {
+  it('keeps a bounded set of cached statements across repeated read-only context renders', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'claude-mem-context-'));
     try {
       const result = runChild(dataDir, { READONLY_CASE: 'statement-lifecycle' });
@@ -165,8 +165,8 @@ describe('context database ownership', () => {
       for (const [index, render] of result.renders.entries()) {
         expect(render.text).toContain('NATIVE_READONLY_RECORD');
         expect(render.text).toContain('ADOPTED_READONLY_RECORD');
-        expect(render.queries).toBe((index + 1) * 3);
-        expect(render.unfinalized).toBe(0);
+        expect(render.queries).toBe(3 + index);
+        expect(render.unfinalized).toBe(2);
       }
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
