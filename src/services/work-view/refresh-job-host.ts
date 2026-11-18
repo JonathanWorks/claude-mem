@@ -22,6 +22,8 @@ import { buildRefreshTask, type StepTiming } from './refresh-task.js';
 
 /** Everything the job needs, as plain values: the thread never reads DB_PATH, DATA_DIR or the main thread's closures. */
 export interface RefreshJobStartInput {
+  /** Names the job on a thread that serves many: the thread outlives each job. */
+  jobId: string;
   needs: RefreshNeeds;
   reason: string;
   databasePath: string;
@@ -34,7 +36,7 @@ export interface RefreshJobStartInput {
   localDeviceId: string;
 }
 
-export interface RefreshJobRunInput { agent: UsableAgentId }
+export interface RefreshJobRunInput { jobId: string; agent: UsableAgentId }
 
 /** What one agent's run of the job came to: its result line or its error, and the step timings so far (kept on failure too). */
 export interface RefreshJobRunResult {

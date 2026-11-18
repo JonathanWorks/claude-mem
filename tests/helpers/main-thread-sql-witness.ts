@@ -37,6 +37,8 @@ export interface MainThreadStatements {
   seen: Array<{ sql: string; count: number }>;
   /** Busy time of every statement the instrumentation recorded on this thread (the canary excluded), in ms. */
   sqlMs: number;
+  /** The busy time of the single costliest statement recorded on this thread, in ms (whole ms, as the window rounds it). */
+  maxStatementMs: number;
   /** Set when the recorded time is over `maxSqlMs`, or the report could not name every statement; null otherwise. */
   problem: string | null;
 }
@@ -64,11 +66,12 @@ export function watchMainThreadStatements(options: WatchOptions): { finish(): Ma
       window.close();
       const seen = new Map<string, number>();
       const problems: string[] = [];
-      let total = 0, sqlMs = 0;
+      let total = 0, sqlMs = 0, maxStatementMs = 0;
       for (const side of [report.scoped, report.unscoped]) {
         if (!side) continue;
         total += side.statements;
         sqlMs += side.sqlMs;
+        maxStatementMs = Math.max(maxStatementMs, side.maxStatementMs);
         const itemised = addTop(side, seen);
         // The report names its three costliest statements; a count that exceeds them is statements nobody can name.
         if (itemised < side.statements) problems.push(`${side.statements - itemised} more statements than the report itemises`);
@@ -80,7 +83,7 @@ export function watchMainThreadStatements(options: WatchOptions): { finish(): Ma
         throw new Error('The SQL statement window did not record the witness\'s own canary statement: another statement window replaced it, so this watch saw nothing.');
       }
       if (sqlMs > options.maxSqlMs) problems.push(`the statements took ${sqlMs} ms on this thread, over the ${options.maxSqlMs} ms budget`);
-      return { total, seen: [...seen].map(([sql, count]) => ({ sql, count })), sqlMs, problem: problems.length > 0 ? problems.join('; ') : null };
+      return { total, seen: [...seen].map(([sql, count]) => ({ sql, count })), sqlMs, maxStatementMs, problem: problems.length > 0 ? problems.join('; ') : null };
     },
   };
 }

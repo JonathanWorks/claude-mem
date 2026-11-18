@@ -51,10 +51,12 @@ export interface ContextReadMethods {
   workViewRefreshNeeds: { input: RefreshNeedsInput; result: RefreshNeeds };
   /** The newest prompt time of each conversation (epoch ms; 0 for none). */
   workViewLastPrompts: { input: LastPromptsInput; result: number[] };
-  /** Opens the refresh job on this thread. A thread holds one job; the caller closes the thread when the job ends. */
+  /** Opens a refresh job on this thread under `input.jobId`. The thread outlives its jobs (ending a thread that loaded bun:sqlite kills bun 1.3.8), so the caller ends the job with `refreshJobEnd`. */
   refreshJobStart: { input: RefreshJobStartInput; result: null };
-  /** The job's prepare step (owner prompts). Runs only on a thread that got `refreshJobStart`. */
-  refreshJobPrepare: { input: null; result: null };
+  /** The job's prepare step (owner prompts). Runs only for a job that got `refreshJobStart`. */
+  refreshJobPrepare: { input: { jobId: string }; result: null };
+  /** Forgets the job; its database handles were closed at the end of each step. Ending an unknown job is a no-op. */
+  refreshJobEnd: { input: { jobId: string }; result: null };
   /** One agent's run of the job. It calls back to the requesting thread for each agent question and each my-focus write. */
   refreshJobRun: { input: RefreshJobRunInput; result: RefreshJobRunResult };
 }

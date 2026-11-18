@@ -102,14 +102,31 @@ const REVIEW_READ_PLAN = ['SEARCH work_view_reviews USING INDEX sqlite_autoindex
 const REVIEW_SIDECAR_ROWS = 5000;
 /**
  * Requests the owner already has when the run starts (grouped, reviewed and sorted into Other, so the run has nothing to do for them), so that
- * every publish reads the review sidecar once per request. The window reports whole milliseconds (it rounds each side's time), so a run of a
- * handful of reads reads as 0 whether or not the time was added up; this many reads add up to a few ms.
+ * every publish reads the review sidecar once per request. The count of those reads is what the test bounds (one per request per snapshot), so
+ * the ledger holds enough requests for a stray extra read per request to change the count by far more than the run's own new request.
  */
 const LEDGER_REQUESTS = 200;
-/** Most milliseconds all the run's main-thread SQL (the review point reads and the my-focus inserts) may add up to, on a synthetic sidecar of REVIEW_SIDECAR_ROWS rows. */
-const TOTAL_SQL_BUDGET_MS = 25;
-/** A budget the over-budget probe must exceed with a statement that really costs time, and a recursion deep enough to take far longer than it. */
-const PROBE_BUDGET_MS = 5;
+/** The new requests the run has to place: the one conversation seedRunConversation writes (the owner's LEDGER_REQUESTS are already placed). */
+const NEW_REQUESTS = 1;
+/** The focus step's placing prompts the fake agent answers: NEW_REQUESTS fit in one batch, and everyone placed leaves nothing queued. */
+const PLACING_BATCHES = 1;
+/** The Other pass is asked once; the fake agent proposes nothing, and the pass still saves one row (its other_pass_hash marker). */
+const OTHER_PASSES = 1;
+/** Every focus answer is saved once: one write per placing batch and one per Other pass, each of which writes rows. */
+const FOCUS_WRITES = PLACING_BATCHES + OTHER_PASSES;
+/** One my-focus row per placement, plus the Other pass's marker row. */
+const FOCUS_ROWS = NEW_REQUESTS + OTHER_PASSES;
+/** Every write of rows publishes once, every publish takes one snapshot, and each snapshot holds the owner's requests plus the new ones. */
+const PUBLISHES = FOCUS_WRITES;
+const REVIEW_READS = PUBLISHES * (LEDGER_REQUESTS + NEW_REQUESTS) * COUNTS_PER_STATEMENT;
+/**
+ * No time budget for the run: a wall-clock bound in a unit test measures the host, not the code (it failed at 36 ms, then at 10 ms per
+ * statement in 4 of 40 runs, on a loaded grunkle). What makes a scan on the main thread impossible is structural: the two known statement
+ * texts, the exact count of each, and the plan of the review read. The witness still needs a finite budget, so the run passes this one.
+ */
+const NO_TIME_BUDGET_MS = Number.MAX_SAFE_INTEGER;
+/** A budget the over-budget probe exceeds with a statement that really costs time: the 3M-row recursion below takes far longer than 1 ms, load only lengthens it. */
+const PROBE_BUDGET_MS = 1;
 const COSTLY_STATEMENT = 'WITH RECURSIVE counter(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 3000000) SELECT count(*) AS n FROM counter';
 
 /** The one statement text of a production my-focus write, as recorded from SessionStore.appendWorkStateEntry (set in beforeEach). */
@@ -132,7 +149,7 @@ function seedRunConversation(db: Database, at: number): void {
 
 /** One call of the real SessionStore.appendWorkStateEntry under the witness, in a list of its own (the statement text does not depend on the list). */
 function recordFocusWrite(store: SessionStore): MainThreadStatements {
-  const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+  const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
   let recording: MainThreadStatements;
   try { store.appendWorkStateEntry({ project: 'home', listName: 'witness-calibration', fields: { note: 'one call, recorded' } }); }
   finally { recording = witness.finish(); }
@@ -277,14 +294,18 @@ describe('a refresh run through WorkViewRoutes', () => {
   const countFocusRows = () => (focusStore.db.prepare('SELECT count(*) AS n FROM work_state_entries WHERE list_name = ?').get(MY_FOCUS_LIST) as { n: number }).n;
 
   /** What the routes do while a viewer is connected: the stream is in `clients`, and every publish is tracked so the run can wait for it. */
-  function connectViewer(live: WorkViewRoutes): { stream: FakeStream; publishes: Promise<void>[] } {
-    const internals = live as unknown as { clients: Set<unknown>; publish: (...args: unknown[]) => Promise<void> };
+  function connectViewer(live: WorkViewRoutes): { stream: FakeStream; publishes: Promise<void>[]; snapshotRequestCounts: number[] } {
+    const internals = live as unknown as { clients: Set<unknown>; publish: (...args: unknown[]) => Promise<void>; snapshot: () => Promise<{ humanRequests: unknown[] }> };
     const stream = new FakeStream();
     internals.clients.add(stream);
     const publishes: Promise<void>[] = [];
     const publish = internals.publish.bind(live);
     internals.publish = (...args) => { const pending = publish(...args); publishes.push(pending); return pending; };
-    return { stream, publishes };
+    // Every snapshot a publish builds reads the review sidecar once per request in it: the count of requests of each is what the reads are compared with.
+    const snapshotRequestCounts: number[] = [];
+    const snapshot = internals.snapshot.bind(live);
+    internals.snapshot = async () => { const view = await snapshot(); snapshotRequestCounts.push(view.humanRequests.length); return view; };
+    return { stream, publishes, snapshotRequestCounts };
   }
 
   /**
@@ -310,7 +331,7 @@ describe('a refresh run through WorkViewRoutes', () => {
     expect(refresh).not.toBeNull();
     reviewSidecar = seedReviewSidecar();
     const viewer = connectViewer(routes);
-    const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
+    const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
     let outcome: Awaited<ReturnType<AutoRefreshWorker['runNow']>>;
     let main: ReturnType<typeof witness.finish>;
     try {
@@ -339,22 +360,27 @@ describe('a refresh run through WorkViewRoutes', () => {
     // (a multi-statement exec included) is a different string and is listed here.
     expect(offList(main)).toEqual([]);
     expect(main.problem).toBeNull();
-    // EXECUTION: the instrumentation was live for the run (it saw the my-focus write, as many times as rows were written) and the writer
-    // really stored those rows (a stub that wrote nowhere would leave the store empty), and the viewer got a snapshot whose review reads ran on this thread.
-    expect(focusRows.length).toBeGreaterThan(0);
-    expect(countFocusRows() - focusRowsBefore).toBe(focusRows.length);
-    expect(viewer.publishes.length).toBeGreaterThan(0);
+    // (2) Every expected count below is computed from the fixture constants alone (NEW_REQUESTS, FOCUS_WRITES, LEDGER_REQUESTS,
+    // COUNTS_PER_STATEMENT), never from a recorder on code under test: a focus answer saved twice, a row appended twice, an extra publish, an
+    // extra snapshot or a second review read each change one of these numbers and fail. EXECUTION: the run wrote the rows, published and
+    // took snapshots (the constants are positive), the writer really stored the rows (a stub that wrote nowhere would leave the store empty),
+    // and the viewer got a snapshot whose review reads ran on this thread.
+    expect(focusRows.length).toBe(FOCUS_ROWS);
+    expect(countFocusRows() - focusRowsBefore).toBe(FOCUS_ROWS);
+    // Which rows were written, not only how many: a skipped Other pass offset by a placement saved twice keeps the count and fails here.
+    const rowsWith = (field: string) => (focusRows as Array<Record<string, unknown>>).filter(row => Object.hasOwn(row, field));
+    expect(rowsWith('anchor_conversation_key')).toHaveLength(NEW_REQUESTS);
+    expect(rowsWith('other_pass_hash')).toHaveLength(OTHER_PASSES);
+    expect(agent.prompts.filter(prompt => prompt.includes('Do only section 3'))).toHaveLength(PLACING_BATCHES + OTHER_PASSES);
+    expect(viewer.publishes.length).toBe(PUBLISHES);
+    expect(viewer.snapshotRequestCounts.length).toBe(PUBLISHES);
     expect(viewer.stream.events).toContain('work-view');
-    const reviewReads = main.total - focusWriteRecording.total * focusRows.length;
-    expect(reviewReads).toBeGreaterThanOrEqual(2);
-    expect(reviewReads % 2).toBe(0);
+    for (const requests of viewer.snapshotRequestCounts) expect(requests).toBe(LEDGER_REQUESTS + NEW_REQUESTS);
     expect([...main.seen].sort((a, b) => a.sql.localeCompare(b.sql))).toEqual([
-      { sql: focusWriteSql, count: focusWriteRecording.total * focusRows.length },
-      { sql: REVIEW_READ_SQL, count: reviewReads },
-    ]);
-    // (2) All of the run's SQL on this thread adds up to less than the budget, and to something: a dead accumulator reads 0.
-    expect(main.sqlMs).toBeGreaterThan(0);
-    expect(main.sqlMs).toBeLessThan(TOTAL_SQL_BUDGET_MS);
+      { sql: focusWriteSql, count: COUNTS_PER_STATEMENT * FOCUS_ROWS },
+      { sql: REVIEW_READ_SQL, count: REVIEW_READS },
+    ].sort((a, b) => a.sql.localeCompare(b.sql)));
+    expect(main.total).toBe(COUNTS_PER_STATEMENT * FOCUS_ROWS + REVIEW_READS);
 
     // (3) The plan of the review read, taken on the connection object LocalReviewStore ran it on (after the watch, so the EXPLAIN is not recorded).
     const store = (routes as unknown as { reviews: { read(id: string, fingerprint: string): unknown } }).reviews;
@@ -375,14 +401,14 @@ describe('a refresh run through WorkViewRoutes', () => {
     expect(agent.prompts.length).toBeGreaterThanOrEqual(4);
     // The run's one new request joined the owner's LEDGER_REQUESTS.
     const titles = Object.values(readLedger(ledgerOfDefaultRefresh).groups.groups).map((group: any) => group.title);
-    expect(titles).toHaveLength(LEDGER_REQUESTS + 1);
+    expect(titles).toHaveLength(LEDGER_REQUESTS + NEW_REQUESTS);
     expect(titles).toContain('Release cards');
     expect(readLedger(ledgerOfDefaultRefresh).story.narrative).toBe('One request is under way.');
     const status = refresh.status()!;
     expect(status.state).toBe('ok');
-    expect(status.result).toBe('1 new conversations grouped, 1 requests reviewed, 1 requests placed, story written.');
+    expect(status.result).toBe(`1 new conversations grouped, 1 requests reviewed, ${NEW_REQUESTS} requests placed, story written.`);
     expect(status.steps!.map(step => step.step)).toEqual(expect.arrayContaining(['grouping', 'review', 'focus', 'story']));
-    // The job's thread was ended with the run.
+    // The run released this test's own client once (its CountingClient owns a thread of its own, unlike the default shared job thread, which is kept).
     expect(clients[0].closes).toBe(1);
   }, 30_000);
 
@@ -453,6 +479,8 @@ describe('a refresh run through WorkViewRoutes', () => {
       expect(answered).toEqual({ n: 3_000_000 });
       expect(main.total).toBe(2);
       expect(main.sqlMs).toBeGreaterThan(PROBE_BUDGET_MS);
+      // The costliest-statement measurement reads it too.
+      expect(main.maxStatementMs).toBeGreaterThan(PROBE_BUDGET_MS);
       expect(main.problem).toMatch(new RegExp(`took .* ms on this thread, over the ${PROBE_BUDGET_MS} ms budget`));
       // The same statement inside a budget it fits is no problem.
       const roomy = watchMainThreadStatements({ maxSqlMs: main.sqlMs * 100 });
@@ -463,7 +491,7 @@ describe('a refresh run through WorkViewRoutes', () => {
 
     it('fails when the report cannot name every statement (a fourth distinct text)', () => {
       const database = connection();
-      const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+      const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
       for (const column of ['id', 'name', 'team', 'rowid']) database.prepare(`SELECT ${column} FROM people`).all();
       const main = witness.finish();
       expect(main.total).toBe(8);
@@ -479,7 +507,7 @@ describe('a refresh run through WorkViewRoutes', () => {
     });
 
     it('refuses to report when its statement window was replaced during the watch', () => {
-      const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
+      const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
       openStatementWindow(1000).close();
       expect(() => witness.finish()).toThrow(/canary/);
     });
@@ -509,7 +537,7 @@ describe('a refresh run through WorkViewRoutes', () => {
       const store = new LocalReviewStore(':memory:');
       try {
         const handle = reviewHandle(store);
-        const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+        const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
         store.read('r', 'f');
         explainOn(handle, REVIEW_READ_SQL, ['r', 'f']);
         const main = witness.finish();
@@ -544,7 +572,7 @@ describe('a refresh run through WorkViewRoutes', () => {
   });
 
   it('the witness fails when the same run happens on the main thread', async () => {
-    const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
+    const witness = watchMainThreadStatements({ maxSqlMs: NO_TIME_BUDGET_MS });
     const ledgerDir = join(directory, 'ledger');
     mkdirSync(ledgerDir, { recursive: true });
     const task = buildRefreshTask({
@@ -604,7 +632,7 @@ describe('the job thread, from the main thread', () => {
     expect(second.run.error).toContain('disk full');
   }, 30_000);
 
-  it('keeps the step timings of a failed run and its message, and ends the thread', async () => {
+  it('keeps the step timings of a failed run and its message, and releases the client', async () => {
     const clients: CountingClient[] = [];
     const agent = fakeAgent(prompt => { if (prompt.includes('Do only section 2')) throw new Error('Agent exploded'); return answerFor(prompt); });
     const { run, task } = await runJob({ agent, saveFocus: saveFocusRows, clients });
@@ -672,7 +700,7 @@ describe('the job thread, from the main thread', () => {
   it('refuses a run on a thread that was never started, loudly', async () => {
     const client = new ContextReadWorkerClient();
     try {
-      const refused = await client.refreshJobRun({ agent: 'claude-code' }, { ask: async () => '', saveFocus: async () => ({ placed: 0, focusAreaIds: [] }), writeLedger: async () => ({ done: null as never }) })
+      const refused = await client.refreshJobRun({ jobId: 'never-started', agent: 'claude-code' }, { ask: async () => '', saveFocus: async () => ({ placed: 0, focusAreaIds: [] }), writeLedger: async () => ({ done: null as never }) })
         .then(() => 'resolved', (error: Error) => error.message);
       expect(refused).toBe('The refresh job was not started on this thread.');
     } finally { await client.close(); }
@@ -710,4 +738,53 @@ describe('the reader thread\'s prompt times', () => {
       expect(await reader.lastPrompts({ databasePath: join(directory, 'missing.db'), conversations: [['claude', 'a']] })).toEqual([0]);
     } finally { await reader.close(); }
   }, 20_000);
+});
+
+describe('the job thread is never ended', () => {
+  it('runs three jobs back to back on one thread in a child process, which exits 0 (bun 1.3.8 dies, exit 133, when a thread that loaded bun:sqlite is terminated)', async () => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, '..', 'helpers', 'refresh-jobs-child.ts')], { stdout: 'pipe', stderr: 'pipe', cwd: join(import.meta.dir, '..', '..') });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    // EXECUTION: the child ran every job to the end (its report line is printed last) before it exited, on one thread.
+    expect({ exitCode, stderr: exitCode === 0 ? '' : stderr }).toEqual({ exitCode: 0, stderr: '' });
+    expect(JSON.parse(stdout.trim().split('\n').pop()!)).toEqual({ states: ['ok', 'ok', 'ok'], threadsStarted: 1, laterAnswers: Array(6).fill('The refresh job was not started on this thread.') });
+  }, 120_000);
+
+  it('releases a client\'s thread on close() without terminate, and the client refuses further requests', async () => {
+    const client = new ContextReadWorkerClient();
+    const refused = await client.refreshJobRun({ jobId: 'none', agent: 'claude-code' }, { ask: async () => '', saveFocus: async () => ({ placed: 0, focusAreaIds: [] }), writeLedger: async () => ({ done: null as never }) })
+      .then(() => 'resolved', (error: Error) => error.message);
+    expect(refused).toBe('The refresh job was not started on this thread.');
+    const thread = (client as unknown as { worker: { terminate(): Promise<number> } | null }).worker!;
+    let terminates = 0;
+    const terminate = thread.terminate.bind(thread);
+    thread.terminate = () => { terminates++; return terminate(); };
+    expect(client.threadsStarted).toBe(1);
+    await client.close();
+    // EXECUTION: close() ran with a live thread (the client held it, and dropped it), and never ended it.
+    expect((client as unknown as { worker: unknown }).worker).toBeNull();
+    expect(terminates).toBe(0);
+    await expect(client.projectsForCwd('/')).rejects.toThrow('Context reader closed');
+    expect(client.threadsStarted).toBe(1);
+  }, 20_000);
+
+  it('keeps jobs apart on one thread: an ended job, or another job\'s id, is refused', async () => {
+    const client = new ContextReadWorkerClient();
+    const callbacks = { ask: async () => '', saveFocus: async () => ({ placed: 0, focusAreaIds: [] }), writeLedger: async () => ({ done: null as never }) };
+    const run = (jobId: string) => client.refreshJobRun({ jobId, agent: 'claude-code' }, callbacks).then(() => 'resolved', (error: Error) => error.message);
+    try {
+      const ledgerDir = join(directory, 'ledger');
+      mkdirSync(ledgerDir, { recursive: true });
+      const input = { databasePath, dataDir: directory, ledgerDir, pluginRoot: PLUGIN_ROOT, settingsPath: join(directory, 'settings.json'), needs: NEEDS, reason: 'test', localDeviceId: '' };
+      await client.refreshJobStart({ ...input, jobId: 'first' });
+      await client.refreshJobStart({ ...input, jobId: 'second' });
+      await client.refreshJobEnd('first');
+      expect(await run('first')).toBe('The refresh job was not started on this thread.');
+      // The second job survived the first one's end: its run reaches the job (and fails inside it, on the empty callbacks), not the refusal.
+      expect(await run('second')).toBe('resolved');
+      expect(await run('third')).toBe('The refresh job was not started on this thread.');
+      await client.refreshJobEnd('second');
+      expect(await run('second')).toBe('The refresh job was not started on this thread.');
+      expect(client.threadsStarted).toBe(1);
+    } finally { await client.close(); }
+  }, 30_000);
 });

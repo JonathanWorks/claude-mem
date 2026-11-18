@@ -26,6 +26,10 @@ export class ContextReadWorkerClient {
   private readonly pending = new Map<number, PendingRead>();
   private nextId = 0;
   private closed = false;
+  private started = 0;
+
+  /** How many threads this client has started: a client that keeps one thread for its life reads 1. */
+  get threadsStarted(): number { return this.started; }
 
   async render(request: ContextRenderRequest): Promise<ContextReadResult> {
     return this.request('render', request);
@@ -79,8 +83,12 @@ export class ContextReadWorkerClient {
     return this.request('refreshJobStart', input);
   }
 
-  async refreshJobPrepare(): Promise<null> {
-    return this.request('refreshJobPrepare', null);
+  async refreshJobPrepare(jobId: string): Promise<null> {
+    return this.request('refreshJobPrepare', { jobId });
+  }
+
+  async refreshJobEnd(jobId: string): Promise<null> {
+    return this.request('refreshJobEnd', { jobId });
   }
 
   /** `handlers` answer the job's callbacks (an agent question, the my-focus write, a ledger change) on this thread while it runs. */
@@ -88,12 +96,17 @@ export class ContextReadWorkerClient {
     return this.request('refreshJobRun', input, handlers);
   }
 
+  /**
+   * Releases the thread without ending it: the client forgets it, rejects what it was waiting for and lets the process end it. A thread
+   * that loaded bun:sqlite must never be terminated: on bun 1.3.8 worker.terminate() (and process.exit inside the thread) kills the whole
+   * process (exit 133), even after the database was closed. An unref'd idle thread keeps nothing alive.
+   */
   async close(): Promise<void> {
     this.closed = true;
     const worker = this.worker;
     this.worker = null;
     this.rejectPending(new Error('Context reader closed'));
-    if (worker) await worker.terminate();
+    worker?.unref();
   }
 
   private getWorker(): Worker {
@@ -106,6 +119,7 @@ export class ContextReadWorkerClient {
       ?? new URL('./context-read-worker.js', import.meta.url);
     const worker = new Worker(entry, { workerData: { contextPlaceholderNonce: CONTEXT_PLACEHOLDER_NONCE } });
     this.worker = worker;
+    this.started++;
     worker.on('message', (message: ContextReadReply | ContextReadCallbackRequest) => {
       if ('callback' in message) { void this.answerCallback(worker, message); return; }
       const request = this.pending.get(message.id);
@@ -169,13 +183,23 @@ export class ContextReadWorkerClient {
   }
 }
 
-const readerState: { client?: ContextReadWorkerClient } = {};
+const readerState: { client?: ContextReadWorkerClient; jobClient?: ContextReadWorkerClient } = {};
 
 export function getContextReadWorker(): ContextReadWorkerClient {
   readerState.client ??= new ContextReadWorkerClient();
   return readerState.client;
 }
 
+/**
+ * The one thread every refresh job of this process runs on, started on first use and kept for the life of the process (never ended: see
+ * ContextReadWorkerClient.close). It is not the reader's thread, so a long job never holds a read.
+ */
+export function getRefreshJobWorker(): ContextReadWorkerClient {
+  readerState.jobClient ??= new ContextReadWorkerClient();
+  return readerState.jobClient;
+}
+
 export async function closeContextReadWorker(): Promise<void> {
   await readerState.client?.close();
+  await readerState.jobClient?.close();
 }

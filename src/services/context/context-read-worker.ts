@@ -61,12 +61,13 @@ function keywordSearchReader(): SessionSearch {
 /** The work view's sources live as long as this thread, so their caches carry from one read to the next. */
 const workViewSources = new WorkViewSources();
 
-/** The refresh job this thread runs, when the requesting thread opened one (it opens one per thread and ends the thread with it). */
-let refreshJob: RefreshJobHost | null = null;
+/** The refresh jobs this thread runs, by id. The thread serves every job of the process and is never ended, so each job is forgotten when it ends. */
+const refreshJobs = new Map<string, RefreshJobHost>();
 
-function openJob(): RefreshJobHost {
-  if (!refreshJob) throw new Error('The refresh job was not started on this thread.');
-  return refreshJob;
+function openJob(jobId: string): RefreshJobHost {
+  const job = refreshJobs.get(jobId);
+  if (!job) throw new Error('The refresh job was not started on this thread.');
+  return job;
 }
 
 const callbackWaits = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
@@ -121,13 +122,16 @@ async function execute(request: ContextReadRequest): Promise<unknown> {
     case 'workViewLastPrompts':
       return runWithSqlScope('worker:work-view.last-prompts', () => workViewSources.lastPrompts(request.input));
     case 'refreshJobStart':
-      refreshJob = new RefreshJobHost(request.input);
+      refreshJobs.set(request.input.jobId, new RefreshJobHost(request.input));
       return null;
     case 'refreshJobPrepare':
-      await openJob().prepare();
+      await openJob(request.input.jobId).prepare();
+      return null;
+    case 'refreshJobEnd':
+      refreshJobs.delete(request.input.jobId);
       return null;
     case 'refreshJobRun':
-      return openJob().run(request.input.agent, {
+      return openJob(request.input.jobId).run(request.input.agent, {
         ask: (input) => callRequester(request.id, 'ask', input),
         saveFocus: (body) => callRequester(request.id, 'saveFocus', body),
         writeLedger: (op) => callRequester(request.id, 'writeLedger', op),

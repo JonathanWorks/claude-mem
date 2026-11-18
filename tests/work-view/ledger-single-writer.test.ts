@@ -295,7 +295,9 @@ describe('a ledger file is written by the main thread alone', () => {
     const target = join(ledgerDir, 'story.json');
     const worker = new Worker(new URL('../helpers/ledger-writer-worker.mjs', import.meta.url));
     const answered = await new Promise<{ attempted: boolean; code?: string }>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); worker.postMessage({ path: target }); });
-    await worker.terminate();
+    // Never terminate it: the thread loaded bun:sqlite (request-groups.mjs), and on bun 1.3.8 ending such a thread kills the process (exit 133).
+    // Unref'd, the idle thread keeps nothing alive and ends with the process.
+    worker.unref();
     // EXECUTION: the worker reached writeJsonAtomic and was refused with the named code; nothing, not even a temp file, was left.
     expect(answered).toEqual({ attempted: true, code: LEDGER_OFF_MAIN_THREAD_CODE });
     expect(readdirSync(ledgerDir)).toEqual(['request-groups.json']);

@@ -384,7 +384,7 @@ export interface AutoRefreshPlace {
   pluginRoot?: string;
   /** Replaces the agent runner's detection, SDK query and environment (tests). */
   agentRunner?: Partial<AgentRunnerDependencies>;
-  /** The thread the job runs on; a new one per job unless a test supplies it. */
+  /** The client a job runs through. Default: the process's shared job thread; the job is ended there, the client and thread are kept. A test supplies its own. */
   createJobClient?: () => ContextReadWorkerClient;
   /** Applies one ledger change the job sends (the worker's serialized main-thread write). Default: applied at once, for a caller with no queue. */
   writeLedger?: (op: LedgerWriteOp) => Promise<LedgerWriteReply>;
