@@ -22,6 +22,7 @@ import { ChromaMcpManager } from './sync/ChromaMcpManager.js';
 import { ChromaSync } from './sync/ChromaSync.js';
 import { openConfiguredSqliteDatabase } from './sqlite/connection.js';
 import { startEventLoopLagMonitor } from './sqlite/event-loop-lag.js';
+import { runBootSequence } from './worker/boot-sequence.js';
 import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } from '../supervisor/index.js';
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 import { setRegistryDegradedReporter } from '../supervisor/process-registry.js';
@@ -583,6 +584,8 @@ export class WorkerService implements WorkerRef {
     ));
 
     this.workViewRoutes = new WorkViewRoutes({
+      // The work view's scans run on a thread of their own, never on this one.
+      execution: 'worker',
       getLocalDeviceId: () => this.dbManager.getCloudSync()?.status().deviceId ?? '',
       // My Rules saves as work-state rows, so a rule change syncs like any other write.
       appendWorkStateEntry: (entry) => {
@@ -685,19 +688,20 @@ export class WorkerService implements WorkerRef {
       process.exit(WORKER_BOOT_FAILED_EXIT_CODE);
     }, BOOT_BIND_DEADLINE_MS);
 
-    // Names the SQL that ran during any event-loop stall over 1 s; unref'd, started once.
-    startEventLoopLagMonitor();
-
-    // Must run before startSupervisor(): its validateWorkerPidFile() removes
-    // the dead previous run's stale PID file, which crash detection needs.
-    this.detectPreviousShutdown();
-
-    await startSupervisor();
-
-    // Log the decision to bind before the call, so the log names the last boot
-    // step reached instead of stopping mid-sentence when a bind stalls (#3557).
-    logger.info('SYSTEM', 'Binding worker HTTP server', { host, port });
-    await this.server.listen(port, host);
+    await runBootSequence({
+      // Names the SQL that ran during any event-loop stall over 1 s; unref'd, started once.
+      startLagMonitor: () => { startEventLoopLagMonitor(); },
+      // Must run before startSupervisor(): its validateWorkerPidFile() removes
+      // the dead previous run's stale PID file, which crash detection needs.
+      detectPreviousShutdown: () => this.detectPreviousShutdown(),
+      startSupervisor: () => startSupervisor(),
+      listen: async () => {
+        // Log the decision to bind before the call, so the log names the last boot
+        // step reached instead of stopping mid-sentence when a bind stalls (#3557).
+        logger.info('SYSTEM', 'Binding worker HTTP server', { host, port });
+        await this.server.listen(port, host);
+      },
+    });
 
     // Bound successfully — the watchdog has done its job.
     clearTimeout(this.bootWatchdog);

@@ -23,7 +23,7 @@ let origin: string;
 function fakeRefresh() {
   const fake = {
     revision: 0, runs: [] as string[], current: null as Record<string, unknown> | null,
-    start() {}, close() {}, status() { return fake.current; },
+    start() {}, stop() {}, close() {}, status() { return fake.current; },
     async runNow({ reason }: { reason: string }) {
       fake.runs.push(reason);
       fake.current = { state: 'waiting-for-agent', reason, error: 'No logged-in Claude Code, Codex or Gemini on this computer yet.' };

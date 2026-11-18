@@ -513,7 +513,9 @@ describe('parallel reviews', () => {
       expect(lastPrompt).toMatch(/Search claude-mem memory with its MCP tools/);
       expect(most).toBe(2);
       // refresh.json's run record gets one timing per step and review batch.
-      expect(task.steps.map(timing => [timing.step, timing.agent, timing.groups])).toEqual([['review', 'claude-code', 8], ['review', 'claude-code', 2], ['focus', 'claude-code', undefined], ['focus', 'claude-code', undefined], ['story', 'claude-code', undefined]]);
+      // Review batches finish in whatever order their reads return, so the two review timings are compared by size.
+      const reviewFirst = (left: { step: string; groups?: number }, right: { step: string; groups?: number }) => Number(left.step !== 'review') - Number(right.step !== 'review') || (right.groups ?? 0) - (left.groups ?? 0);
+      expect([...task.steps].sort(reviewFirst).map(timing => [timing.step, timing.agent, timing.groups])).toEqual([['review', 'claude-code', 8], ['review', 'claude-code', 2], ['focus', 'claude-code', undefined], ['focus', 'claude-code', undefined], ['story', 'claude-code', undefined]]);
       expect(task.steps.every(timing => timing.startedAt === new Date(NOW).toISOString() && timing.finishedAt === timing.startedAt)).toBe(true);
       expect(Object.keys(readLedger(dir).progress)).toHaveLength(10);
     } finally { rmSync(dir, { recursive: true, force: true }); }

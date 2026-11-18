@@ -8,6 +8,7 @@ import { reduceWorkState } from './work-state-reduce.mjs';
 import { activitySignature, buildAgentView, readAgentRecords, readEvidence } from './agent-view.mjs';
 import { ledgerSignature, openSuggestions, readLedger } from './request-groups.mjs';
 import { recordedFile, bucketFileAvailable } from './work-product.mjs';
+import { buildRules } from './my-rules.mjs';
 
 // reduceWorkState lives in work-state-reduce.mjs so my-focus.mjs can replay rows without importing this module.
 export { reduceWorkState } from './work-state-reduce.mjs';
@@ -51,12 +52,23 @@ export class WorkStateSource {
     ledgerDir = null,
     pollIntervalMs = 1000,
     localDeviceId = '',
+    activityRefreshMs = 0,
+    now = Date.now,
   } = {}) {
     this.databasePath = databasePath;
     this.currentProject = currentProject;
     this.parentProject = parentProject;
     this.pollIntervalMs = pollIntervalMs;
     this.localDeviceId = localDeviceId;
+    // A change in recorded activity alone (a tool call, a prompt) rebuilds the view at most this often, or every
+    // 2x the last build when that is longer, so a long build never keeps the reader busy. 0 turns the limit off.
+    this.activityRefreshMs = activityRefreshMs;
+    this.now = now;
+    this.builtAt = null;
+    this.lastBuildMs = 0;
+    this.lastOtherSignature = null;
+    // The work state was reloaded (readRules) without rebuilding the agent view built from it.
+    this.agentViewStale = false;
     this.titleCachePath = titleCachePath;
     this.titleCache = {};
     this.titleCacheSignature = null;
@@ -89,67 +101,57 @@ export class WorkStateSource {
       this.databaseIdentity = identity;
       this.signature = null;
       this.activitySignature = null;
+      this.builtAt = null;
     }
     return this.database;
   }
 
-  read() {
+  workStateSignature(database) {
+    const revision = database.prepare(`SELECT COUNT(*) AS count, MAX(id) AS id${this.columns.has('sync_rev') ? ', SUM(CAST(sync_rev AS INTEGER)) AS synced_revision' : ''} FROM work_state_entries`).get();
+    return `${revision.count}:${revision.id ?? 0}:${revision.synced_revision ?? 0}:${this.localDeviceId}`;
+  }
+
+  /** Reduces every work-state row into this.cachedState. Run inside a read transaction. */
+  loadWorkState(database) {
+    const originColumns = ['origin_device_id', 'origin_local_id'].filter(column => this.columns.has(column));
+    const entries = database.prepare(`SELECT id, project, list_name, fields, created_at_epoch${originColumns.length ? `, ${originColumns.join(', ')}` : ''} FROM work_state_entries`).all();
+    const currentProjectScope = resolveReadScope(database, [this.parentProject, this.currentProject]);
+    const requested = new Set([this.parentProject, this.currentProject].map(normalizedKey));
+    // Match worker's scope_project only for directly requested legacy keys.
+    const scopedEntries = entries.map((entry) => requested.has(normalizedKey(entry.project)) ? { ...entry, scope_project: this.currentProject } : entry);
+    this.cachedState = reduceWorkState(scopedEntries, { currentProject: this.currentProject, currentProjectScope, localDeviceId: this.localDeviceId });
+  }
+
+  /** Whether an activity-only change may rebuild the view now (see activityRefreshMs). */
+  activityRebuildDue(otherSignature) {
+    if (this.activityRefreshMs <= 0 || this.builtAt === null || otherSignature !== this.lastOtherSignature) return true;
+    return this.now() - this.builtAt >= Math.max(this.activityRefreshMs, 2 * this.lastBuildMs);
+  }
+
+  markUnreadable(error) {
+    this.source.connected = false;
+    // Do not expose paths, SQL, environment, or any raw worker reply.
+    this.source.error = /ENOENT/.test(String(error.code)) ? 'Local work-state database is unavailable.' : 'Local work-state database could not be read. Retrying.';
+    this.close();
+  }
+
+  /**
+   * The saved rules only: the work-state rows and the ledger's story, without the activity scan the agent view needs.
+   * Reading the rules to rewrite MY-RULES.md after a sync must not cost a full read. Returns `connected: false` and no
+   * rules when the database cannot be read, which is not the same as no rules.
+   */
+  readRules() {
     this.source.lastCheckedAt = new Date().toISOString();
     try {
       const database = this.openDatabase();
-      const revision = database.prepare(`SELECT COUNT(*) AS count, MAX(id) AS id${this.columns.has('sync_rev') ? ', SUM(CAST(sync_rev AS INTEGER)) AS synced_revision' : ''} FROM work_state_entries`).get();
-      const signature = `${revision.count}:${revision.id ?? 0}:${revision.synced_revision ?? 0}:${this.localDeviceId}`;
-      this.readTitleCache();
+      const signature = this.workStateSignature(database);
       this.readLedger();
-      const activity = `${activitySignature(database)}|titles:${this.titleCacheSignature}|ledger:${this.ledgerSignature}`;
-      if (signature !== this.signature || activity !== this.activitySignature || !this.source.connected) {
+      if (signature !== this.signature || !this.source.connected) {
         database.exec('BEGIN');
         try {
-          if (signature !== this.signature || !this.source.connected) {
-            const originColumns = ['origin_device_id', 'origin_local_id'].filter(column => this.columns.has(column));
-            const entries = database.prepare(`SELECT id, project, list_name, fields, created_at_epoch${originColumns.length ? `, ${originColumns.join(', ')}` : ''} FROM work_state_entries`).all();
-            const currentProjectScope = resolveReadScope(database, [this.parentProject, this.currentProject]);
-            const requested = new Set([this.parentProject, this.currentProject].map(normalizedKey));
-            // Match worker's scope_project only for directly requested legacy keys.
-            const scopedEntries = entries.map((entry) => requested.has(normalizedKey(entry.project)) ? { ...entry, scope_project: this.currentProject } : entry);
-            this.cachedState = reduceWorkState(scopedEntries, { currentProject: this.currentProject, currentProjectScope, localDeviceId: this.localDeviceId });
-          }
-          this.agentRevision++;
-          this.agentView = { ...buildAgentView(this.cachedState, readAgentRecords(database, { workState: this.cachedState, ledger: this.ledger }), { titleCache: this.titleCache, ledger: this.ledger }), revision: this.agentRevision };
-          // Hash full linked evidence without sending its potentially large raw
-          // text in every snapshot. A review covers the source disclosure too.
-          const evidenceHashes = new Map();
-          for (const request of this.agentView.humanRequests) {
-            const refs = new Map();
-            const add = ref => {
-              if (ref && ['work-state', 'observation', 'prompt', 'summary', 'session'].includes(ref.kind)
-                && Number.isSafeInteger(ref.id) && ref.id > 0) refs.set(`${ref.kind}:${ref.id}`, ref);
-            };
-            const addUrl = url => {
-              const match = /^\/api\/work-view\/evidence\/([\w-]+)\/(\d+)$/.exec(url ?? '');
-              if (match) add({ kind: match[1], id: Number(match[2]) });
-            };
-            addUrl(request.original?.url);
-            for (const update of request.scopeUpdates) addUrl(update.url);
-            for (const item of request.items) {
-              addUrl(item.url);
-              addUrl(item.request?.url);
-              addUrl(item.request?.original?.url);
-              for (const field of [item.nextStep, item.outcome]) {
-                if (field?.source === 'session-summary') add({ kind: 'summary', id: field.sourceId });
-              }
-              for (const ref of item.sourceRefs ?? []) add(ref);
-            }
-            for (const activity of [...request.activity, ...request.workstreams.flatMap(stream => stream.activity)]) add(activity.sourceRef);
-            request.sourceContentHashes = [...refs].sort(([a], [b]) => a.localeCompare(b)).map(([key, ref]) => {
-              if (!evidenceHashes.has(key)) {
-                evidenceHashes.set(key, createHash('sha256').update(JSON.stringify(readEvidence(database, ref.kind, ref.id))).digest('hex'));
-              }
-              return { ...ref, hash: evidenceHashes.get(key) };
-            });
-          }
+          this.loadWorkState(database);
           this.signature = signature;
-          this.activitySignature = activity;
+          this.agentViewStale = true;
           database.exec('COMMIT');
         } catch (error) {
           database.exec('ROLLBACK');
@@ -159,13 +161,88 @@ export class WorkStateSource {
       this.source.connected = true;
       this.source.error = null;
       this.source.lastUpdatedAt = this.cachedState.lastUpdatedAt;
+      return { connected: true, rules: buildRules(this.cachedState, this.ledger).rules };
     } catch (error) {
-      this.source.connected = false;
-      // Do not expose paths, SQL, environment, or any raw worker reply.
-      this.source.error = /ENOENT/.test(String(error.code)) ? 'Local work-state database is unavailable.' : 'Local work-state database could not be read. Retrying.';
-      this.close();
+      this.markUnreadable(error);
+      return { connected: false, rules: [] };
+    }
+  }
+
+  read() {
+    this.source.lastCheckedAt = new Date().toISOString();
+    try {
+      const database = this.openDatabase();
+      const signature = this.workStateSignature(database);
+      this.readTitleCache();
+      this.readLedger();
+      const otherSignature = `titles:${this.titleCacheSignature}|ledger:${this.ledgerSignature}`;
+      const activity = `${activitySignature(database)}|${otherSignature}`;
+      const workStateChanged = signature !== this.signature || !this.source.connected || this.agentViewStale;
+      // A work-state or ledger change is somebody's own write and is read back at once; only recorded activity is rate limited.
+      if (workStateChanged || (activity !== this.activitySignature && this.activityRebuildDue(otherSignature))) {
+        const startedAt = this.now();
+        database.exec('BEGIN');
+        try {
+          if (signature !== this.signature || !this.source.connected) this.loadWorkState(database);
+          this.agentRevision++;
+          this.agentView = { ...buildAgentView(this.cachedState, readAgentRecords(database, { workState: this.cachedState, ledger: this.ledger }), { titleCache: this.titleCache, ledger: this.ledger }), revision: this.agentRevision };
+          this.attachSourceContentHashes(database);
+          this.signature = signature;
+          this.activitySignature = activity;
+          this.lastOtherSignature = otherSignature;
+          this.agentViewStale = false;
+          database.exec('COMMIT');
+        } catch (error) {
+          database.exec('ROLLBACK');
+          throw error;
+        }
+        this.lastBuildMs = this.now() - startedAt;
+        this.builtAt = this.now();
+      }
+      this.source.connected = true;
+      this.source.error = null;
+      this.source.lastUpdatedAt = this.cachedState.lastUpdatedAt;
+    } catch (error) {
+      this.markUnreadable(error);
     }
     return this.snapshot();
+  }
+
+  /**
+   * Hash full linked evidence without sending its potentially large raw text in every snapshot.
+   * A review covers the source disclosure too.
+   */
+  attachSourceContentHashes(database) {
+    const evidenceHashes = new Map();
+    for (const request of this.agentView.humanRequests) {
+      const refs = new Map();
+      const add = ref => {
+        if (ref && ['work-state', 'observation', 'prompt', 'summary', 'session'].includes(ref.kind)
+          && Number.isSafeInteger(ref.id) && ref.id > 0) refs.set(`${ref.kind}:${ref.id}`, ref);
+      };
+      const addUrl = url => {
+        const match = /^\/api\/work-view\/evidence\/([\w-]+)\/(\d+)$/.exec(url ?? '');
+        if (match) add({ kind: match[1], id: Number(match[2]) });
+      };
+      addUrl(request.original?.url);
+      for (const update of request.scopeUpdates) addUrl(update.url);
+      for (const item of request.items) {
+        addUrl(item.url);
+        addUrl(item.request?.url);
+        addUrl(item.request?.original?.url);
+        for (const field of [item.nextStep, item.outcome]) {
+          if (field?.source === 'session-summary') add({ kind: 'summary', id: field.sourceId });
+        }
+        for (const ref of item.sourceRefs ?? []) add(ref);
+      }
+      for (const activity of [...request.activity, ...request.workstreams.flatMap(stream => stream.activity)]) add(activity.sourceRef);
+      request.sourceContentHashes = [...refs].sort(([a], [b]) => a.localeCompare(b)).map(([key, ref]) => {
+        if (!evidenceHashes.has(key)) {
+          evidenceHashes.set(key, createHash('sha256').update(JSON.stringify(readEvidence(database, ref.kind, ref.id))).digest('hex'));
+        }
+        return { ...ref, hash: evidenceHashes.get(key) };
+      });
+    }
   }
 
   snapshot() {

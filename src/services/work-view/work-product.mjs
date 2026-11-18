@@ -363,16 +363,68 @@ export function fileUrl(product) {
 
 const FILE_EXTENSION_PATTERN = Object.keys(FILE_KINDS).map((extension) => `files_modified LIKE '%${extension}"%'`).join(' OR ');
 
+const TOOL_USE_COLUMNS = 'id, session_db_id, prompt_number, tool_name, tool_input, tool_response, created_at_epoch';
+// Tools whose recorded result is a published link: exact names, and LIKE patterns that match several MCP servers' names.
+const PUBLISHING_TOOL_NAMES = ['Artifact', 'mcp__claude_ai_Notion__notion-create-pages', 'mcp__claude_ai_Claude_Docs__batch', 'mcp__claude_ai_Claude_Docs__create'];
+const PUBLISHING_TOOL_PATTERNS = ['%chatgpt_space__create_page', '%sites__save_version_and_deploy%'];
+// A guard for the loose index scan: a database never holds this many distinct tool names.
+const MAX_DISTINCT_TOOL_NAMES = 20000;
+
+/** SQLite folds only ASCII letters in LIKE, so this does too (a Unicode-aware `i` flag would match more). */
+const foldAscii = (text) => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+
+/** The same match as SQLite `name LIKE pattern` (no ESCAPE): `%` is any run of characters, `_` any one, ASCII case folded. */
+export function likeMatcher(pattern) {
+  const source = [...foldAscii(pattern)].map((char) => char === '%' ? '.*' : char === '_' ? '.' : char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
+  const regex = new RegExp(`^${source}$`, 'su');
+  return (name) => regex.test(foldAscii(name));
+}
+
+/**
+ * Every distinct `tool_uses.tool_name` that `test` accepts, found by a loose index scan: one index seek per distinct
+ * name (`tool_name > ? ORDER BY tool_name LIMIT 1`) instead of a scan of every row. The names are a few hundred, the rows millions.
+ */
+export function distinctToolNames(read, test) {
+  const names = [];
+  let after = '';
+  for (let step = 0; step < MAX_DISTINCT_TOOL_NAMES; step++) {
+    const row = read('SELECT tool_name FROM tool_uses WHERE tool_name > ? ORDER BY tool_name LIMIT 1', [after])[0];
+    if (typeof row?.tool_name !== 'string') break;
+    after = row.tool_name;
+    if (test(after)) names.push(after);
+  }
+  return names;
+}
+
+/** Newest first by id, one row per id, at most `limit`: the result one statement over all of the rows would give. */
+function newestById(lists, limit) {
+  const byId = new Map();
+  for (const row of lists.flat()) byId.set(row.id, row);
+  return [...byId.values()].sort((a, b) => b.id - a.id).slice(0, limit);
+}
+
+/**
+ * The publishing calls since `sinceEpoch`. One `OR` over exact names, LIKE patterns and a Bash text match could only
+ * be answered by scanning tool_uses, so it is split into statements an index serves and merged here:
+ * exact and pattern-resolved names (idx_tool_uses_name_created), and Bash calls that name `gh pr create`.
+ */
+function readPublishingCalls(read, sinceEpoch, limit) {
+  const matchers = PUBLISHING_TOOL_PATTERNS.map(likeMatcher);
+  const resolved = distinctToolNames(read, (name) => matchers.some((matches) => matches(name)));
+  const names = [...new Set([...PUBLISHING_TOOL_NAMES, ...resolved])];
+  const byName = read(`SELECT ${TOOL_USE_COLUMNS} FROM tool_uses
+    WHERE tool_name IN (${names.map(() => '?')}) AND created_at_epoch >= ? ORDER BY id DESC LIMIT ?`, [...names, sinceEpoch, limit]);
+  const pullRequests = read(`SELECT ${TOOL_USE_COLUMNS} FROM tool_uses
+    WHERE tool_name = 'Bash' AND created_at_epoch >= ? AND tool_input LIKE '%gh pr create%' ORDER BY id DESC LIMIT ?`, [sinceEpoch, limit]);
+  return newestById([byName, pullRequests], limit);
+}
+
 /** Recorded calls and observations that may hold work product since `sinceEpoch`.
  * Git commands are read separately so their volume never crowds out publishers. */
 export function readProductRecords(read, sinceEpoch, limit = 2000) {
-  const publishingCalls = read(`SELECT id, session_db_id, prompt_number, tool_name, tool_input, tool_response, created_at_epoch FROM tool_uses
-    WHERE created_at_epoch >= ? AND (tool_name IN ('Artifact', 'mcp__claude_ai_Notion__notion-create-pages', 'mcp__claude_ai_Claude_Docs__batch', 'mcp__claude_ai_Claude_Docs__create')
-      OR tool_name LIKE '%chatgpt_space__create_page' OR tool_name LIKE '%sites__save_version_and_deploy%'
-      OR (tool_name = 'Bash' AND tool_input LIKE '%gh pr create%'))
-    ORDER BY id DESC LIMIT ?`, [sinceEpoch, limit]);
-  const gitCalls = read(`SELECT id, session_db_id, prompt_number, tool_name, tool_input, tool_response, created_at_epoch FROM tool_uses
-    WHERE created_at_epoch >= ? AND tool_name = 'Bash' AND tool_input LIKE '%git%' AND tool_input NOT LIKE '%gh pr create%'
+  const publishingCalls = readPublishingCalls(read, sinceEpoch, limit);
+  const gitCalls = read(`SELECT ${TOOL_USE_COLUMNS} FROM tool_uses
+    WHERE tool_name = 'Bash' AND created_at_epoch >= ? AND tool_input LIKE '%git%' AND tool_input NOT LIKE '%gh pr create%'
       AND (tool_input LIKE '%commit%' OR tool_input LIKE '%push%' OR tool_input LIKE '%checkout -b%' OR tool_input LIKE '%switch -c%')
     ORDER BY id DESC LIMIT ?`, [sinceEpoch, limit]);
   const productCalls = [...publishingCalls, ...gitCalls];

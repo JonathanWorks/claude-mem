@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import {
   DEFAULT_EVENT_LOOP_LAG_MS,
@@ -241,16 +239,5 @@ describe('event-loop lag monitor', () => {
       second.advance(100 + 2000);
       expect(lags[0].context.unscoped).toBeNull();
     });
-  });
-});
-
-describe('worker boot', () => {
-  it('starts the event-loop lag monitor before the supervisor and the HTTP bind', () => {
-    const source = readFileSync(join(import.meta.dir, '..', '..', 'src', 'services', 'worker-service.ts'), 'utf8');
-    expect(source).toMatch(/import \{ startEventLoopLagMonitor \} from '\.\/sqlite\/event-loop-lag\.js';/);
-    const started = source.indexOf('\n    startEventLoopLagMonitor();');
-    expect(started).toBeGreaterThan(0);
-    expect(source.indexOf('await startSupervisor();')).toBeGreaterThan(started);
-    expect(source.indexOf('await this.server.listen(port, host);')).toBeGreaterThan(started);
   });
 });

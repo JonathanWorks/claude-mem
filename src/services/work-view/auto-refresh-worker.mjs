@@ -7,6 +7,8 @@
 // after failed runs only, the scheduled check backs off (below). A run that
 // works, and runNow, keep no minimum interval.
 // Status lives in refresh.json beside the ledger; My Work shows it live.
+// The timer runs only while a My Work page is open (WorkViewRoutes starts it with the first page and stops it with the
+// last), and the needs scan can run on another thread (readNeeds), so an idle worker never scans the database.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { refreshNeeds, writeJsonAtomic } from './request-groups.mjs';
@@ -33,10 +35,12 @@ export class AutoRefreshWorker {
    * @param {() => string} options.localDeviceId the worker's sync device id ('' when cloud sync never started), so my-focus
    *   rows replay in its order; required
    */
-  constructor({ dir, openDatabase, runJob, enabled = () => true, checkMs = TEN_MINUTES_MS, now = Date.now, log = () => {}, localDeviceId }) {
+  constructor({ dir, openDatabase, runJob, enabled = () => true, checkMs = TEN_MINUTES_MS, now = Date.now, log = () => {}, localDeviceId, readNeeds = null }) {
     if (typeof localDeviceId !== 'function') throw new TypeError('AutoRefreshWorker needs localDeviceId, the worker\'s sync device id.');
     Object.assign(this, { dir, openDatabase, runJob, enabled, checkMs, now, log, localDeviceId });
-    this.timer = null; this.closed = false; this.busy = false;
+    // Where the needs scan runs: given, it is awaited (the worker passes a read on its own thread); absent, it runs here.
+    this.needsReader = readNeeds;
+    this.timer = null; this.closed = false; this.busy = false; this.scanning = false;
   }
 
   path() { return join(this.dir, 'refresh.json'); }
@@ -48,36 +52,77 @@ export class AutoRefreshWorker {
 
   write(status) { writeJsonAtomic(this.path(), status); }
 
-  start() { this.tick(); this.timer = setInterval(() => this.tick(), this.checkMs); this.timer.unref?.(); }
+  /**
+   * Starts the ten-minute timer; a second call keeps it. The first check runs now only when the last one is older than
+   * checkMs: a viewer that reconnects every second must not rerun the needs scan on each connect.
+   */
+  start() {
+    if (this.timer || this.closed) return;
+    if (this.checkIsDue()) this.tick();
+    this.timer = setInterval(() => this.tick(), this.checkMs);
+    this.timer.unref?.();
+  }
+
+  /** Stops the timer and keeps the status and the run in progress; start() resumes. */
+  stop() { clearInterval(this.timer); this.timer = null; }
+
+  checkIsDue() {
+    let status = null;
+    try { status = this.status(); } catch { return true; }
+    // The newest sign of a check: an idle check writes checkedAt, a run writes startedAt and finishedAt, and a check whose
+    // needs scan threw writes checkFailedAt, so a failing scan is not rerun by every first viewer that connects.
+    const lastCheckAt = Math.max(0, ...[status?.checkedAt, status?.checkFailedAt, status?.finishedAt, status?.startedAt].map(value => Date.parse(value ?? '')).filter(Number.isFinite));
+    return this.now() - lastCheckAt >= this.checkMs;
+  }
 
   /** A timer check: a failure (e.g. no database yet) is logged and the next check tries again. */
   tick() { this.check().catch((error) => this.log('warn', 'Work view refresh check failed', { error: String(error?.message ?? error) })); }
 
-  close() { this.closed = true; clearInterval(this.timer); }
+  close() { this.closed = true; this.stop(); }
 
   iso(epoch = this.now()) { return new Date(epoch).toISOString(); }
 
-  readNeeds() {
+  /** One needs scan at a time: the scan can run on another thread, so a second check must not start beside it. */
+  async scanNeeds() {
+    this.scanning = true;
+    try { return await this.readNeeds(); }
+    finally { this.scanning = false; }
+  }
+
+  async readNeeds() {
+    if (this.needsReader) return this.needsReader();
     const database = this.openDatabase();
     try { return refreshNeeds({ dir: this.dir, database, now: this.now(), localDeviceId: this.localDeviceId() }); }
     finally { database.close(); }
+  }
+
+  /**
+   * Writes the time of a scheduled check whose needs scan threw (checkFailedAt, with the reason), so checkIsDue() counts it
+   * and the next first viewer does not scan again until due. The caller rethrows the scan's error.
+   */
+  recordFailedCheck(previous, error) {
+    try { this.write({ ...previous, state: previous?.state ?? 'idle', checkFailedAt: this.iso(), checkError: String(error?.message ?? error).slice(0, 500) }); }
+    catch (writeError) { this.log('warn', 'Work view refresh could not record a failed check', { error: String(writeError?.message ?? writeError) }); }
   }
 
   /** The ten-minute check: run when something is due, otherwise record that nothing is. */
   async check() {
     if (this.closed) return 'closed';
     if (!this.enabled()) return 'disabled';
-    if (this.busy) return 'running';
+    if (this.busy || this.scanning) return 'running';
     const previous = this.status();
     // Another live worker process owns a run in progress.
     if (previous?.state === 'running' && previous.pid !== process.pid && previous.pid && processIsAlive(previous.pid)) return 'running';
     // Backing off after failed runs: wait for the time the last failure set.
     if (previous?.state === 'failed' && previous.failures && this.now() < Date.parse(previous.nextAt)) return 'backing-off';
-    const needs = this.readNeeds();
+    let needs;
+    try { needs = await this.scanNeeds(); }
+    catch (error) { this.recordFailedCheck(previous, error); throw error; }
+    if (this.closed) return 'closed';
     if (!needs.needed) {
       // A run this worker never finished was cut off by a restart.
       const interrupted = previous?.state === 'running';
-      this.write({ ...previous, state: interrupted ? 'failed' : previous?.state ?? 'idle', ...(interrupted ? { error: 'The previous refresh stopped before finishing.' } : {}), checkedAt: this.iso(), nextAt: this.iso(this.now() + this.checkMs), needs });
+      this.write({ ...previous, state: interrupted ? 'failed' : previous?.state ?? 'idle', ...(interrupted ? { error: 'The previous refresh stopped before finishing.' } : {}), checkedAt: this.iso(), nextAt: this.iso(this.now() + this.checkMs), needs, checkFailedAt: undefined, checkError: undefined });
       return 'idle';
     }
     return this.run(needs, 'scheduled');
@@ -86,8 +131,8 @@ export class AutoRefreshWorker {
   /** Run now instead of at the next ten-minute check (the install funnel after its scan), when something is due. */
   async runNow({ reason }) {
     if (this.closed) return 'closed';
-    if (this.busy) return 'running';
-    const needs = this.readNeeds();
+    if (this.busy || this.scanning) return 'running';
+    const needs = await this.scanNeeds();
     // A re-scan that found nothing new starts no agent.
     if (!needs.needed) return 'idle';
     return this.run(needs, reason);

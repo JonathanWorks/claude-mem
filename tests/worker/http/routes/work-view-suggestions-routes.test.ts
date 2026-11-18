@@ -134,4 +134,39 @@ describe('request suggestions', () => {
     expect(readLedger(ledgerDir).groups.suggestions[C].status).toBe('open');
     expect((await snapshot()).suggestions).toHaveLength(1);
   });
+
+  describe('a ledger change the refresh job sends (the worker\'s main thread is the ledger\'s only writer)', () => {
+    const D = key('d');
+    const placement = { key: D, root: 'repo', title: 'Write the pricing page', picked: null,
+      verdict: { requestId: null, band: 'new' as const, confidence: 1, evidence: 'Judge jev: a request of its own.', judge: 'jev' } };
+    // The merge also fills the first ask of every stored group that lacks one (the fixture's A and C): null is "looked up, not found".
+    const facts = { projects: { [D]: 'repo' }, anchorAsks: { [D]: { text: 'Write the pricing page', atEpoch: Date.now() }, [A]: null, [C]: null } };
+
+    it('is applied to the ledger as it is, in line with the owner\'s answer sent at the same time: both survive', async () => {
+      const [joined, reply] = await Promise.all([
+        answer({ conversationKey: C, action: 'join' }),
+        routes.recordLedgerWrite({ kind: 'place', placement, now: Date.now(), facts }),
+      ]);
+      // EXECUTION: the owner's answer was saved, and the job's change came back as done (not as a request for facts).
+      expect(joined.status).toBe(200);
+      expect(reply).toEqual({ done: { target: null, suggested: null, title: 'Write the pricing page' } });
+      const ledger = readLedger(ledgerDir).groups;
+      expect(ledger.suggestions[C].status).toBe('joined');
+      expect(ledger.conversations[C]).toBe(RELEASE_CARDS);
+      expect(ledger.groups[SPACING]).toBeUndefined();
+      expect(ledger.conversations[D]).toBe(groupIdFor(D));
+      expect(ledger.groups[groupIdFor(D)]).toMatchObject({ title: 'Write the pricing page', anchorAsk: facts.anchorAsks[D] });
+    });
+
+    it('answers needFacts, and writes nothing, when the conversation\'s facts were not sent', async () => {
+      const before = JSON.stringify(readLedger(ledgerDir).groups);
+      const reply = await routes.recordLedgerWrite({ kind: 'place', placement, now: Date.now(), facts: { projects: {}, anchorAsks: {} } });
+      expect(reply).toEqual({ needFacts: { projects: [D] } });
+      expect(JSON.stringify(readLedger(ledgerDir).groups)).toBe(before);
+    });
+
+    it('throws the validation error of an answer that does not validate, as a TypeError', async () => {
+      await expect(routes.recordLedgerWrite({ kind: 'progress', now: Date.now(), answer: { groupId: 'g_unknown' } })).rejects.toBeInstanceOf(TypeError);
+    });
+  });
 });

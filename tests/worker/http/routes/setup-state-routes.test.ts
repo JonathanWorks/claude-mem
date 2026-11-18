@@ -113,7 +113,7 @@ describe('setup state endpoints', () => {
 
   it('report a live extraction run as background work (the installer holds any restart for it), not one a restart cut off', async () => {
     let status: Record<string, unknown> | null = { state: 'running', pid: process.pid };
-    await start({ status: () => status, start() {}, close() {}, async runNow() { return 'idle'; } });
+    await start({ status: () => status, start() {}, stop() {}, close() {}, async runNow() { return 'idle'; } });
     expect((await state()).backgroundWorkRunning).toEqual(['extraction']);
     // A 'running' record left by a worker process that is gone.
     status = { state: 'running', pid: 2 ** 22 + 12345 };

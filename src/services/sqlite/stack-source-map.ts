@@ -3,6 +3,7 @@ import { SourceMap } from 'node:module';
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { logger } from '../../utils/logger.js';
+import type { Unrefable } from './timer-handle.js';
 
 /**
  * Names the application frame behind a slow statement. The worker ships as one
@@ -131,11 +132,6 @@ export function parseStackFrame(line: string): StackFrame | null {
   if (!match) return null;
   const [, fn, file, lineNumber, columnNumber] = match;
   return { fn: fn || undefined, file, line: Number(lineNumber), column: Number(columnNumber) };
-}
-
-/** A timer handle that may be unref'd so it never keeps the process alive. */
-export interface Unrefable {
-  unref?: () => void;
 }
 
 export interface CachedMapLoaderOptions {

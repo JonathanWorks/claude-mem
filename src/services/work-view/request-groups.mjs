@@ -21,10 +21,11 @@
 //                                                   place requests and propose areas (saved through the worker)
 //   bun request-groups.mjs refresh-needs [--days 14]  what the automatic refresh would do now
 import { Database } from 'bun:sqlite';
-import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isMainThread } from 'node:worker_threads';
 import { conversationKey, isConversationKey, isHumanActionRequest, originalFor, requestText } from './request-projection.mjs';
 import { GOAL_KINDS, goalKindOf, OWNER_GOALS_LIST } from './owner-goals.mjs';
 import { NO_PROJECT, projectRoot, upgradedGroupRoot, withDerivedProjects } from './session-project.mjs';
@@ -185,11 +186,28 @@ function readJson(path, fallback) {
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
 }
 
+/** Thrown when a ledger file is written from a worker thread: the worker's main thread is the ledger's one writer. */
+export const LEDGER_OFF_MAIN_THREAD_CODE = 'LEDGER_OFF_MAIN_THREAD';
+
+/**
+ * Writes `path` whole or not at all: a file of its own name (process id and random suffix, so no other writer's temp file is ever
+ * this one), then a rename. Inside the worker, only the main thread writes the ledger (see ledger-writes.mjs): the refresh job's
+ * thread sends each change to it as a message, because two threads that each read, change and rename lose whichever wrote first.
+ * A write from any other thread throws instead of racing.
+ */
 export function writeJsonAtomic(path, value) {
+  if (!isMainThread) {
+    throw Object.assign(new Error(`Refused to write ${path} from a worker thread: the worker's main thread is the ledger's only writer. Send the change to it (ledger-writes.mjs remoteLedgerWriter).`), { code: LEDGER_OFF_MAIN_THREAD_CODE });
+  }
   mkdirSync(join(path, '..'), { recursive: true });
-  const temp = `${path}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temp, path);
+  const temp = `${path}.${process.pid}-${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
 }
 
 const emptyGroups = () => ({ version: 1, updatedAt: null, conversations: {}, groups: {}, ignored: {} });
@@ -479,9 +497,26 @@ export function openSuggestions(ledger) {
     }));
 }
 
+/** The stored groups alone (one small file): what a read-modify-write of the ledger reads, never the progress folder. */
+export function readGroupsFile(dir = LEDGER_DIR) { return readJson(join(dir, 'request-groups.json'), emptyGroups()); }
+
+/** story.json alone, or null. */
+export function readStoryFile(dir = LEDGER_DIR) { return readJson(join(dir, 'story.json'), null); }
+
+/** The hook-recorded prompts the setup scan judged agent-written. */
+export function readAgentWrittenPromptIds(dir = LEDGER_DIR) {
+  return new Set(readJson(join(dir, AGENT_WRITTEN_PROMPTS_FILE), { promptIds: [] }).promptIds ?? []);
+}
+
+/** One group's stored progress review (with the group's current title), or undefined when it has none or the group is gone. */
+function readProgressEntry(dir, groups, groupId) {
+  const entry = groups.groups[groupId] ? readJson(join(dir, 'progress', `${groupId}.json`), null) : null;
+  return entry?.groupId ? { ...entry, title: groups.groups[groupId].title } : undefined;
+}
+
 /** Everything the monitor needs, read without touching the database. */
 export function readLedger(dir = LEDGER_DIR) {
-  const groups = readJson(join(dir, 'request-groups.json'), emptyGroups());
+  const groups = readGroupsFile(dir);
   const progress = {};
   let names = [];
   try { names = readdirSync(join(dir, 'progress')).filter((name) => /^g_[0-9a-f]{12}\.json$/.test(name)); }
@@ -491,8 +526,8 @@ export function readLedger(dir = LEDGER_DIR) {
     if (entry?.groupId && groups.groups[entry.groupId]) progress[entry.groupId] = { ...entry, title: groups.groups[entry.groupId].title };
   }
   return {
-    groups, progress, story: readJson(join(dir, 'story.json'), null), refresh: readJson(join(dir, 'refresh.json'), null),
-    agentWrittenPromptIds: new Set(readJson(join(dir, AGENT_WRITTEN_PROMPTS_FILE), { promptIds: [] }).promptIds ?? []),
+    groups, progress, story: readStoryFile(dir), refresh: readJson(join(dir, 'refresh.json'), null),
+    agentWrittenPromptIds: readAgentWrittenPromptIds(dir),
   };
 }
 
@@ -844,20 +879,109 @@ export function validateGroupingAnswer(answer, input) {
   return answer;
 }
 
-/** `apply` without the file: the decisions merged into `stored`, with every touched conversation's
- * project read from the database and each new group's first ask kept in the ledger (so a card's start
- * never moves forward when the anchor conversation ages out of My Work's reads). Returns the next
- * ledger without writing it. */
-export function applyDecisions(stored, decisions, { database, now = Date.now(), excludedPromptIds = null }) {
+/** Thrown by factLookups when a merge needs a session's facts the caller did not supply; `needed` names them. */
+export const LEDGER_FACTS_NEEDED_CODE = 'LEDGER_FACTS_NEEDED';
+
+/** What a merge reads from the database, as two lookups: each conversation's project, and each anchor's first ask. */
+export function databaseLookups(database, excludedPromptIds = null) {
+  return {
+    projectsOf: (keys) => readConversationProjects(database, keys),
+    anchorAsksOf: (keys) => new Map(readCandidates(database, { conversationKeys: keys, excludedPromptIds }).map((candidate) => [candidate.conversationKey, candidate.original])),
+  };
+}
+
+/**
+ * The same two lookups answered from facts a caller read earlier, as `{ projects: { key: project | null }, anchorAsks: { key: ask | null } }`
+ * (null: looked up, not found). The worker's main thread merges with these, so it never opens the database. A key the facts do not
+ * hold throws LEDGER_FACTS_NEEDED listing every missing key: a guess here would merge against the wrong project.
+ */
+export function factLookups(facts) {
+  const answer = (table, wanted, name) => {
+    const known = facts?.[table] ?? {};
+    const missing = wanted.filter((key) => !Object.hasOwn(known, key));
+    if (missing.length) throw Object.assign(new Error(`The merge needs the ${name} of ${missing.length} conversation(s) that the supplied facts do not hold.`), { code: LEDGER_FACTS_NEEDED_CODE, needed: { [table]: missing } });
+    return new Map(wanted.filter((key) => known[key] != null).map((key) => [key, known[key]]));
+  };
+  return {
+    projectsOf: (keys) => answer('projects', [...new Set(keys)].filter(isConversationKey), 'project'),
+    anchorAsksOf: (keys) => answer('anchorAsks', [...new Set(keys)], 'first ask'),
+  };
+}
+
+/** Wraps lookups so each answer is also kept as facts (read them with `facts()`): a dry run learns what a merge will look up. */
+export function recordingLookups(lookups) {
+  const facts = { projects: {}, anchorAsks: {} };
+  const record = (table, inner) => (keys) => {
+    const found = inner(keys);
+    for (const key of new Set(keys)) if (table === 'anchorAsks' || isConversationKey(key)) facts[table][key] = found.get(key) ?? null;
+    return found;
+  };
+  return {
+    projectsOf: record('projects', lookups.projectsOf), anchorAsksOf: record('anchorAsks', lookups.anchorAsksOf),
+    facts: () => structuredClone(facts),
+  };
+}
+
+/** `apply` without the file or the database: the decisions merged into `stored`, with every touched conversation's
+ * project and each new group's first ask taken from `lookups` (so a card's start never moves forward when the anchor
+ * conversation ages out of My Work's reads). Returns the next ledger without writing it. */
+export function applyDecisionsWith(stored, decisions, now, lookups) {
   // Every conversation the decisions touch, and the members their groups already hold, by project.
   const touched = (decisions?.groups ?? []).flatMap((group) => Array.isArray(group?.conversations) ? group.conversations : []).filter(isConversationKey);
   const touchedGroups = new Set(touched.map((key) => groupIdFor(key)));
   const existing = Object.entries(stored?.conversations ?? {}).filter(([, id]) => touchedGroups.has(id)).map(([key]) => key);
-  const next = applyGroupDecisions(stored, decisions, now, { projectOf: readConversationProjects(database, [...touched, ...existing]) });
+  const next = applyGroupDecisions(stored, decisions, now, { projectOf: lookups.projectsOf([...touched, ...existing]) });
   const missing = Object.values(next.groups).filter((group) => !group.anchorAsk).map((group) => group.anchor);
-  const anchors = new Map(readCandidates(database, { conversationKeys: missing, excludedPromptIds }).map((candidate) => [candidate.conversationKey, candidate.original]));
+  const anchors = lookups.anchorAsksOf(missing);
   for (const group of Object.values(next.groups)) if (!group.anchorAsk && anchors.has(group.anchor)) group.anchorAsk = anchors.get(group.anchor);
   return next;
+}
+
+/** `apply` against the database: see applyDecisionsWith. */
+export function applyDecisions(stored, decisions, { database, now = Date.now(), excludedPromptIds = null }) {
+  return applyDecisionsWith(stored, decisions, now, databaseLookups(database, excludedPromptIds));
+}
+
+/**
+ * The ledger's writes. Each is one synchronous read-modify-write of the file as it is NOW: nothing is awaited between the read
+ * and the rename, so on one thread no other write of that thread can land between them. Inside the worker only the main thread
+ * calls these (the job thread's writer sends it a message instead); a skill script is a process of its own.
+ * `lookups` (databaseLookups or factLookups) supply what a merge reads from the database.
+ */
+export function writeDecisions(dir, decisions, { now, lookups }) {
+  const merged = applyDecisionsWith(readGroupsFile(dir), decisions, now, lookups);
+  writeJsonAtomic(join(dir, 'request-groups.json'), merged);
+  return { groups: Object.keys(merged.groups).length, conversations: Object.keys(merged.conversations).length };
+}
+
+/** Validates one progress review against the groups as they are now, and writes it with its reading. */
+export function writeProgress(dir, answer, { now }) {
+  const groups = readGroupsFile(dir);
+  const reviewed = validateProgress(answer, groups.groups);
+  const checkedAt = iso(now);
+  const previous = readProgressEntry(dir, groups, reviewed.groupId);
+  // The story is retold only from reviews whose facts moved; reworded prose and review timestamps are not news.
+  const unchanged = previous && JSON.stringify(storyFacts(previous)) === JSON.stringify(storyFacts(reviewed));
+  const recorded = { ...reviewed, checkedAt, changedAt: unchanged ? previous.changedAt ?? previous.checkedAt : checkedAt, readings: appendReading(previous, { at: checkedAt, percent: reviewed.percent }) };
+  writeJsonAtomic(join(dir, 'progress', `${recorded.groupId}.json`), recorded);
+  return { recorded: recorded.groupId, state: recorded.state, percent: recorded.percent, readings: recorded.readings.length };
+}
+
+/** Writes the validated story beside the rules owner-goals put in the stored one (save_goals.py replaces those, not this). */
+export function writeStory(dir, validated, { now }) {
+  const fromOwnerGoals = (readStoryFile(dir)?.preferences ?? []).filter((preference) => preference?.source === OWNER_GOALS_LIST);
+  const written = { ...validated, preferences: [...validated.preferences, ...fromOwnerGoals], writtenAt: iso(now) };
+  writeJsonAtomic(join(dir, 'story.json'), written);
+  return { recorded: 'story', preferences: written.preferences.length };
+}
+
+/** The writer for a process that owns its own writes (the skill script, tests): the three writes above, done here. */
+export function localLedgerWriter(dir) {
+  return {
+    apply: (decisions, { database, now }) => writeDecisions(dir, decisions, { now, lookups: databaseLookups(database, readAgentWrittenPromptIds(dir)) }),
+    recordProgress: (answer, { now }) => writeProgress(dir, answer, { now }),
+    recordStory: (validated, { now }) => writeStory(dir, validated, { now }),
+  };
 }
 
 /**
@@ -867,9 +991,14 @@ export function applyDecisions(stored, decisions, { database, now = Date.now(), 
  * it throws a TypeError when the worker refused the answer before writing anything. record-focus returns a promise.
  * judge: the Jev judge for the `judge` command: undefined reads it from the install's settings
  * (request-judge.mjs configuredJudge), null routes with code links only. That command returns a promise.
+ * ledger: who writes the ledger for `apply`, `record-progress`, `record-story` and the `judge --apply` placements: undefined
+ * writes the files here (localLedgerWriter); the refresh job passes a writer that sends each change to the worker's main
+ * thread (ledger-writes.mjs remoteLedgerWriter). A writer that answers with a promise makes the command return a promise.
  */
-export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), print = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId, saveFocus = null, judge = undefined } = {}) {
+export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), print = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId, saveFocus = null, judge = undefined, ledger: ledgerWriter = null } = {}) {
   const [command, ...args] = argv;
+  const writer = ledgerWriter ?? localLedgerWriter(dir);
+  const afterWrite = (written, show) => typeof written?.then === 'function' ? written.then(show) : show(written);
   const db = () => database ?? openDatabase();
   const since = () => now - option(args, 'days', 14) * DAY_MS;
   if (command === 'candidates') {
@@ -892,14 +1021,12 @@ export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now
   if (command === 'judge') {
     // Imported here, not at the top: the judge module builds on this one.
     return import('./request-judge.mjs')
-      .then(({ configuredJudge, routeUndecided }) => routeUndecided({ dir, database: db(), judge: judge === undefined ? configuredJudge() : judge, now, days: option(args, 'days', 14), apply: args.includes('--apply') }))
+      .then(({ configuredJudge, routeUndecided }) => routeUndecided({ dir, database: db(), judge: judge === undefined ? configuredJudge() : judge, now, days: option(args, 'days', 14), apply: args.includes('--apply'), ledger: ledgerWriter }))
       .then(print);
   }
   if (command === 'apply') {
-    const ledger = readLedger(dir);
-    const next = applyDecisions(ledger.groups, readInput(args[0] ?? '-'), { database: db(), now, excludedPromptIds: ledger.agentWrittenPromptIds });
-    writeJsonAtomic(join(dir, 'request-groups.json'), next);
-    return print({ groups: Object.keys(next.groups).length, conversations: Object.keys(next.conversations).length });
+    const decisions = readInput(args[0] ?? '-');
+    return afterWrite(writer.apply(decisions, { database: db(), now }), print);
   }
   if (command === 'pending' || command === 'show') {
     const ledger = readLedger(dir);
@@ -933,15 +1060,8 @@ export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now
     return print({ due: due.length, groups: due.slice(0, limit).map((group) => ({ groupId: group.groupId, title: group.title, lastActivityAt: group.lastActivityAt, conversations: group.conversations.length })), deferred: Math.max(0, due.length - limit), ungroupedConversations: ungrouped });
   }
   if (command === 'record-progress') {
-    const ledger = readLedger(dir);
-    const reviewed = validateProgress(readInput(args[0] ?? '-'), ledger.groups.groups);
-    const checkedAt = iso(now);
-    const previous = ledger.progress[reviewed.groupId];
-    // The story is retold only from reviews whose facts moved; reworded prose and review timestamps are not news.
-    const unchanged = previous && JSON.stringify(storyFacts(previous)) === JSON.stringify(storyFacts(reviewed));
-    const entry = { ...reviewed, checkedAt, changedAt: unchanged ? previous.changedAt ?? previous.checkedAt : checkedAt, readings: appendReading(ledger.progress[reviewed.groupId], { at: checkedAt, percent: reviewed.percent }) };
-    writeJsonAtomic(join(dir, 'progress', `${entry.groupId}.json`), entry);
-    return print({ recorded: entry.groupId, state: entry.state, percent: entry.percent, readings: entry.readings.length });
+    const answer = readInput(args[0] ?? '-');
+    return afterWrite(writer.recordProgress(answer, { now }), print);
   }
   if (command === 'story-input') {
     const { groups, progress, story } = readLedger(dir);
@@ -966,11 +1086,7 @@ export function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now
   }
   if (command === 'record-story') {
     const validated = validateStory(readInput(args[0] ?? '-'));
-    // Rules owner-goals found in the owner's prompts (save_goals.py) are its to replace, not the story's.
-    const fromOwnerGoals = (readLedger(dir).story?.preferences ?? []).filter((preference) => preference?.source === OWNER_GOALS_LIST);
-    const story = { ...validated, preferences: [...validated.preferences, ...fromOwnerGoals], writtenAt: iso(now) };
-    writeJsonAtomic(join(dir, 'story.json'), story);
-    return print({ recorded: 'story', preferences: story.preferences.length });
+    return afterWrite(writer.recordStory(validated, { now }), print);
   }
   // focus-input and record-focus take the same flags, so record-focus checks the answer against the input it answers.
   const focusQuestion = () => {

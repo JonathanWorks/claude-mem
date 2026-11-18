@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { OwnerPrompt } from '../prompt-import/index.js';
 import { getOrCreateIntentCredentials, intentCredentialHeaders, readIntentCredentials } from '../../shared/intent-credentials.js';
-import { groupIdFor, readConversationProjects, readGoals, readLedger, writeJsonAtomic, type LedgerDatabase } from './request-groups.mjs';
+import { groupIdFor, readConversationProjects, readGoals, readGroupsFile, writeJsonAtomic, type LedgerDatabase } from './request-groups.mjs';
 import { projectRoot } from './session-project.mjs';
 import { readFocusAreas } from './data-source.mjs';
 import { MY_FOCUS_LIST, navWordIn, ownerGoalsAreaRows } from './my-focus.mjs';
@@ -220,14 +220,14 @@ export class HostedIntent {
     const { ledgerDir } = this.options;
     const keys = new Map(keyEntries);
     const writtenAt = this.iso();
-    const ledger = readLedger(ledgerDir);
     // The stored session's project (derived for scratch folders) is what My Work reads; the scan's own project covers the rest.
     const projectOf = new Map<string, string | undefined>(projects);
     const projectsDatabase = this.options.openDatabase();
     try {
       for (const [key, project] of readConversationProjects(projectsDatabase, [...keys.values()])) projectOf.set(key, project);
     } finally { projectsDatabase.close(); }
-    const groups = mergeGroups(ledger.groups, result, keys, writtenAt, projectOf);
+    // Merged here so a bad answer throws before anything is written, and merged again below against the file as it is then.
+    mergeGroups(readGroupsFile(ledgerDir), result, keys, writtenAt, projectOf);
     const goals = result.goals.goals;
     const mapPath = join(ledgerDir, 'owner-goals', 'hosted-owner-map.md');
     const rows: Array<Record<string, string | number | boolean | null>> = [{
@@ -289,7 +289,9 @@ export class HostedIntent {
     writeFileSync(mapPath, result.goals.map, { mode: 0o600 });
     for (const fields of focusRows) this.options.appendWorkStateEntry({ project: this.options.homeProject(), listName: MY_FOCUS_LIST, fields });
     for (const fields of rows) this.options.appendWorkStateEntry({ project: this.options.homeProject(), listName: 'owner-goals', fields });
-    writeJsonAtomic(join(ledgerDir, 'request-groups.json'), groups);
+    // The main thread is the ledger's only writer (ledger-writes.mjs): this read-merge-write has no await in it, so no other write of
+    // the ledger lands between the read and the rename.
+    writeJsonAtomic(join(ledgerDir, 'request-groups.json'), mergeGroups(readGroupsFile(ledgerDir), result, keys, writtenAt, projectOf));
     writeJsonAtomic(join(ledgerDir, 'story.json'), {
       narrative: goals.human_summary, preferences: result.rules.map(rule => ({ ...rule, quotes: rule.quotes.map(quote => ({ ...quote, at: quoteIso(quote.at, offset) })) })),
       writtenAt, source: 'hosted-intent',

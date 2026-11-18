@@ -26,11 +26,17 @@ import { resolveOpenRouterConfig } from '../../OpenRouterProvider.js';
 import { resolveOpenAICompatConfig } from '../../OpenAICompatProvider.js';
 import { resolveOpenAICompatReasoning } from '../../reasoning-budget.js';
 import { AutoRefreshWorker } from '../../../work-view/auto-refresh-worker.mjs';
-import { buildRefreshTask } from '../../../work-view/refresh-task.js';
+import type { RefreshScans } from '../../../work-view/refresh-task.js';
+import type { ContextReadWorkerClient } from '../../../context/ContextReadWorkerClient.js';
+import { remoteRefreshTask } from '../../../work-view/refresh-job-client.js';
 import type { HostedIntent } from '../../../work-view/hosted-intent.js';
 import { isOpenRouterApiUrl } from '../../../../shared/openrouter-base-url.js';
-import { runAgentTask } from '../../../agent-runner/run.js';
+import { runAgentTask, type AgentRunnerDependencies } from '../../../agent-runner/run.js';
 import { ledgerSignature, readLedger } from '../../../work-view/request-groups.mjs';
+import { applyLedgerWrite, type LedgerWriteOp, type LedgerWriteReply } from '../../../work-view/ledger-writes.mjs';
+import { inlineWorkViewReader, workerWorkViewReader, type WorkViewReader } from '../../../work-view/work-view-reader.js';
+import type { WorkViewReadInput } from '../../../work-view/work-view-sources.js';
+import { runWithSqlScope } from '../../../sqlite/sql-scope.js';
 import { configuredJudge, decideSuggestion } from '../../../work-view/request-judge.mjs';
 import { configuredFocusJudge } from '../../../work-view/focus-judge.mjs';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
@@ -233,8 +239,19 @@ interface WorkViewOptions {
   humanCopy?: HumanCopyWorker | null;
   /** Runs owner-goals and request-progress when something is due. Omitted: on for the default ledger only. */
   autoRefresh?: AutoRefreshWorker | null;
+  /**
+   * Where the database scans for the work view run. 'inline' (the default) runs them on the calling thread, which
+   * keeps the route tests simple; the worker passes 'worker', so no scan ever runs on its main thread.
+   */
+  execution?: 'inline' | 'worker';
+  /** The reader that runs the scans; tests pass a spy. Overrides `execution`. */
+  reader?: WorkViewReader;
+  /** Recorded activity alone rebuilds the view at most this often. Default 2000 ms on a worker thread, 0 inline. */
+  activityRefreshMs?: number;
   /** Overall-request ledger written by the request-progress skill; null disables it. */
   ledgerDir?: string | null;
+  /** The default automatic refresh's agents and job thread (tests); see AutoRefreshPlace. */
+  autoRefreshPlace?: Omit<AutoRefreshPlace, 'databasePath'>;
   /** Saves one work-state row (rule changes). Without it, rules are read-only. */
   appendWorkStateEntry?: ((entry: WorkStateWrite) => void) | null;
   /** The project rule rows are saved under: the home folder's, like owner-goals. */
@@ -258,6 +275,9 @@ interface WorkViewOptions {
 /** One overall request on the Reveal, read from the request-group ledger so new installs (prompts only) have work too. */
 export interface SetupWorkItem { groupId: string; title: string; platform: string | null; lastActiveAt: string | null; progressPercent: number | null }
 const SETUP_WORK_SHOWN = 5;
+/** On a worker thread, recorded activity alone rebuilds the view at most every 2 s (or 2x the last build): live cards stay live without a rebuild per tool call. */
+const WORKER_ACTIVITY_REFRESH_MS = 2000;
+const HEARTBEAT_MS = 15000;
 
 const setupScanBody = z.object({ improveProduct: z.boolean().optional() }).strict();
 const setupScanPreferencesBody = z.object({ improveProduct: z.boolean() }).strict();
@@ -349,12 +369,32 @@ export function configuredHumanCopyProvider(settingsPath = USER_SETTINGS_PATH): 
   return provider;
 }
 
-/** My Work's automatic refresh on the user's own logged-in agent, unless
- * CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH is 'false' (checked on every tick). */
+/** Where the automatic refresh reads, and how its agents run. Tests name their own; the worker uses the defaults. */
+export interface AutoRefreshPlace {
+  /** The database the run reads. Default: the worker's own (DB_PATH). */
+  databasePath?: string;
+  /** The installed plugin folder holding skills/. Default: this bundle's own (getPackageRoot). */
+  pluginRoot?: string;
+  /** Replaces the agent runner's detection, SDK query and environment (tests). */
+  agentRunner?: Partial<AgentRunnerDependencies>;
+  /** The thread the job runs on; a new one per job unless a test supplies it. */
+  createJobClient?: () => ContextReadWorkerClient;
+  /** Applies one ledger change the job sends (the worker's serialized main-thread write). Default: applied at once, for a caller with no queue. */
+  writeLedger?: (op: LedgerWriteOp) => Promise<LedgerWriteReply>;
+}
+
+/**
+ * My Work's automatic refresh on the user's own logged-in agent, unless CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH is 'false'
+ * (checked on every tick). The needs scan goes through `scans` (the reader's thread), and the whole run, every database
+ * read and write it makes, runs on a thread of its own (refresh-job-host.ts): this thread opens no database handle for
+ * a refresh except through `scans`. Without `scans` (tests, tools) the needs scan runs here, on its own handle.
+ */
 export function defaultAutoRefresh(ledgerDir: string, settingsPath = USER_SETTINGS_PATH, setupPath = setupStatePath(), setupActive = () => false,
-  localDeviceId: () => string, saveFocus: (body: RouterFocusBody) => { placed: number; focusAreaIds: string[] }): AutoRefreshWorker {
+  localDeviceId: () => string, saveFocus: (body: RouterFocusBody) => { placed: number; focusAreaIds: string[] } | Promise<{ placed: number; focusAreaIds: string[] }>,
+  scans?: RefreshScans, place: AutoRefreshPlace = {}): AutoRefreshWorker {
+  const databasePath = place.databasePath ?? DB_PATH;
   const openDatabase = () => {
-    const database = openSqliteDatabase(DB_PATH, { readonly: true, create: false });
+    const database = openSqliteDatabase(databasePath, { readonly: true, create: false });
     database.exec('PRAGMA busy_timeout = 1500');
     return database;
   };
@@ -365,22 +405,35 @@ export function defaultAutoRefresh(ledgerDir: string, settingsPath = USER_SETTIN
     enabled: () => !setupActive() && (readSetupState(setupPath).status === 'complete' || !hasActiveSetupSession(setupPath))
       && SettingsDefaultsManager.loadFromFile(settingsPath, true, { readOnly: true }).CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH !== 'false',
     runJob: async ({ needs, reason }) => {
-      // The judges are read from settings per run, so a provider change applies to the next refresh.
-      const task = buildRefreshTask({ needs, reason, dataDir: DATA_DIR, ledgerDir, pluginRoot: getPackageRoot(), openDatabase, localDeviceId, saveFocus,
-        judge: configuredJudge(settingsPath), focusJudge: configuredFocusJudge(settingsPath) });
-      return { ...(await runAgentTask(task)), steps: task.steps };
+      // The judges are read from settings per run (on the job's thread), so a provider change applies to the next refresh.
+      const task = remoteRefreshTask({ needs, reason, localDeviceId: localDeviceId(), saveFocus, createClient: place.createJobClient,
+        writeLedger: place.writeLedger ?? (async op => applyLedgerWrite(ledgerDir, op)),
+        settings: { databasePath, dataDir: DATA_DIR, ledgerDir, pluginRoot: place.pluginRoot ?? getPackageRoot(), settingsPath } });
+      try { return { ...(await runAgentTask(task, place.agentRunner)), steps: task.steps }; }
+      finally { await task.close(); }
     },
     log: (level, message, data) => (level === 'info' ? logger.info : logger.warn).call(logger, 'WORKER', message, data),
     localDeviceId,
+    readNeeds: scans?.needs,
   });
 }
 
 export class WorkViewRoutes extends BaseRouteHandler {
+  /** Single-row lookups (evidence, files, deliverables) only: the scans that build the view run through `reader`. */
   private source: WorkStateSource;
+  private reader: WorkViewReader;
+  private activityRefreshMs: number;
   private reviews: LocalReviewStore;
   private clients = new Set<Response>();
   private poll: ReturnType<typeof setInterval> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private polling = false;
+  /** Mutating handlers run one at a time, so a request reads the rows the one before it wrote. */
+  private mutations: Promise<unknown> = Promise.resolve();
+  private lastSource: WorkViewSnapshot['source'] | null = null;
+  /** The last connected view the reader built: what a reader failure answers, stale, instead of an empty view. */
+  private lastReaderView: WorkViewSnapshot | null = null;
+  private humanCopyLoaded: Promise<void> = Promise.resolve();
   private signature = '';
   private closed = false;
   private pollIntervalMs: number;
@@ -414,19 +467,23 @@ export class WorkViewRoutes extends BaseRouteHandler {
       pollIntervalMs: this.pollIntervalMs,
       ledgerDir,
     });
+    const onWorkerThread = options.execution === 'worker';
+    this.reader = options.reader ?? (onWorkerThread ? workerWorkViewReader() : inlineWorkViewReader());
+    this.activityRefreshMs = options.activityRefreshMs ?? (onWorkerThread ? WORKER_ACTIVITY_REFRESH_MS : 0);
     this.reviews = new LocalReviewStore(options.reviewPath ?? join(DATA_DIR, 'work-view-reviews.db'));
     this.humanCopy = options.humanCopy === undefined
       ? new HumanCopyWorker({ provider: configuredHumanCopyProvider(), cachePath: join(DATA_DIR, 'work-view', 'human-copy.json'),
         warn: message => logger.warn('WORKER', message) })
       : options.humanCopy;
     this.humanCopy?.pauseWhile(() => this.setupIsActive());
-    if (this.humanCopy) void this.humanCopy.load().then(() => this.humanCopy?.start());
+    // Only the cache is loaded here. The summary pump and the refresh timer start with the first viewer (startClientTimers).
+    if (this.humanCopy) this.humanCopyLoaded = Promise.resolve(this.humanCopy.load());
     // A test or demo with its own ledger never starts an agent unless it passes one in.
     this.autoRefresh = options.autoRefresh === undefined
       ? (options.ledgerDir === undefined && ledgerDir ? defaultAutoRefresh(ledgerDir, options.settingsPath, options.setupStatePath,
-        () => this.setupIsActive(), () => this.getLocalDeviceId(), body => this.recordRouterFocus(body)) : null)
+        () => this.setupIsActive(), () => this.getLocalDeviceId(), body => this.recordRouterFocus(body),
+        this.refreshScans(ledgerDir), { writeLedger: op => this.recordLedgerWrite(op), ...options.autoRefreshPlace, databasePath: this.databasePath }) : null)
       : options.autoRefresh;
-    this.autoRefresh?.start();
     this.appendWorkStateEntry = options.appendWorkStateEntry ?? null;
     this.homeProject = options.homeProject;
     this.rulesFilePath = options.rulesFilePath ?? join(DATA_DIR, 'MY-RULES.md');
@@ -441,7 +498,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     this.unsubscribeHistoryImport = this.historyImport?.subscribe(state => this.broadcast('setup-import', state)) ?? null;
     // Hosted extraction is awaited inside the scan, so failures stay in the scan screen's error slot.
     this.unsubscribeSetupScan = this.setupScan?.subscribe(state => {
-      this.publish();
+      void this.publish();
       this.broadcast('setup-scan', state);
     }) ?? null;
     // Rule rows pulled from another device change what Claude Code should load; rebuild the file then too.
@@ -466,28 +523,33 @@ export class WorkViewRoutes extends BaseRouteHandler {
     setImmediate(() => {
       this.rulesRebuildScheduled = false;
       if (this.closed) return;
-      try { this.rebuildRulesFileFromSavedRules(); }
-      catch (error) { logger.warn('HTTP', 'Could not rebuild MY-RULES.md after sync', { error: error instanceof Error ? error.message : String(error) }); }
+      this.rebuildRulesFileFromSavedRules().catch(error => {
+        if (!this.closed) logger.warn('HTTP', 'Could not rebuild MY-RULES.md after sync', { error: error instanceof Error ? error.message : String(error) });
+      });
     });
   }
 
-  /** Rewrites MY-RULES.md when the saved rules render differently. Never from an unreadable source, which reads as no rules. */
-  rebuildRulesFileFromSavedRules(): boolean {
-    const view = this.source.read().agentView;
-    if (!view.source.connected) return false;
-    const markdown = renderRulesFile((view.rules ?? []) as SavedRule[]).markdown;
+  /**
+   * Rewrites MY-RULES.md when the saved rules render differently. Never from an unreadable source, which reads as no rules.
+   * It reads the rules only, not the whole view: a sync that lands while nobody has the page open must not cost a full scan.
+   */
+  async rebuildRulesFileFromSavedRules(): Promise<boolean> {
+    const { connected, rules } = await runWithSqlScope('work-view.rules', () => this.reader.rules(this.readInput()));
+    if (!connected || this.closed) return false;
+    const markdown = renderRulesFile(rules as SavedRule[]).markdown;
     let current: string | null = null;
     try { current = readFileSync(this.rulesFilePath, 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     if (current === markdown) return false;
-    this.writeRulesFile((view.rules ?? []) as SavedRule[]);
+    this.writeRulesFile(rules as SavedRule[]);
     return true;
   }
 
   setupRoutes(app: express.Application): void {
-    app.get('/api/work-view', workViewLoopbackOnly, this.wrapHandler((_req, res) => {
+    app.get('/api/work-view', workViewLoopbackOnly, this.wrapHandler(async (_req, res) => {
+      const snapshot = await this.snapshot();
       res.setHeader('Cache-Control', 'no-store');
-      res.json(this.snapshot());
+      res.json(snapshot);
     }));
     app.get('/api/work-view/events', workViewLoopbackOnly, this.wrapHandler(this.events));
     app.get('/api/work-view/evidence/:kind/:id', workViewLoopbackOnly, this.wrapHandler((req, res) => {
@@ -685,9 +747,48 @@ export class WorkViewRoutes extends BaseRouteHandler {
     for (const client of this.clients) this.send(client, event, value);
   }
 
-  private snapshot(): WorkViewSnapshot {
-    this.source.localDeviceId = this.getLocalDeviceId();
-    const snapshot = this.source.read().agentView;
+  /** The refresh's needs scan, run through the reader so it leaves the main thread whenever the reads do. */
+  private refreshScans(ledgerDir: string): RefreshScans {
+    return { needs: () => this.reader.refreshNeeds({ ledgerDir, databasePath: this.databasePath, localDeviceId: this.getLocalDeviceId(), now: Date.now() }) };
+  }
+
+  private readInput(): WorkViewReadInput {
+    return {
+      databasePath: this.databasePath, ledgerDir: this.ledgerDir, localDeviceId: this.getLocalDeviceId(),
+      pollIntervalMs: this.pollIntervalMs, activityRefreshMs: this.activityRefreshMs,
+    };
+  }
+
+  /**
+   * The view as the reader built it. A reader that failed (its thread exited, its queue was full) never throws: it answers the
+   * last view it built, marked disconnected and stale, so a viewer keeps My Work and the next read recovers it. Before any read
+   * succeeded there is no view to keep, so it answers the empty one, unreadable.
+   */
+  private async readView(): Promise<WorkViewSnapshot> {
+    try {
+      const view = await this.reader.read(this.readInput());
+      if (view.source.connected) this.lastReaderView = view;
+      return view;
+    } catch (error) {
+      if (this.closed) throw error;
+      logger.warn('HTTP', 'The work view reader failed; answering the last view it built as stale', { error: error instanceof Error ? error.message : String(error), hadView: this.lastReaderView !== null });
+      const unreadable = { connected: false, error: 'Local work-state database could not be read. Retrying.' };
+      if (this.lastReaderView) return { ...this.lastReaderView, source: { ...this.lastReaderView.source, ...unreadable, stale: true } };
+      const empty = this.source.snapshot().agentView;
+      return { ...empty, source: { ...empty.source, ...unreadable } };
+    }
+  }
+
+  /** Runs one mutating handler after the ones before it have finished. A failure of one never blocks the next. */
+  private serialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.mutations.then(task, task);
+    this.mutations = run.catch(() => undefined);
+    return run;
+  }
+
+  private async snapshot(): Promise<WorkViewSnapshot> {
+    const snapshot = await this.readView();
+    this.lastSource = snapshot.source;
     for (const request of snapshot.humanRequests) {
       request.contentFingerprint = contentFingerprint(request);
       request.review = this.reviews.read(request.id, request.contentFingerprint);
@@ -695,22 +796,22 @@ export class WorkViewRoutes extends BaseRouteHandler {
     const reviewRevision = createHash('sha256').update(JSON.stringify(snapshot.humanRequests.map(request => [request.id, request.contentFingerprint, request.review]))).digest('hex').slice(0, 16);
     // Generated wording is display only: it never changes what was reviewed.
     const view = this.humanCopy ? this.humanCopy.observe(snapshot) as WorkViewSnapshot : snapshot;
-    return { ...view, rulesFile: this.rulesFileStatus(snapshot), setup: this.setupView(view), revision: `${snapshot.revision}:${reviewRevision}:${this.humanCopy?.revision ?? 0}` };
+    return { ...view, rulesFile: this.rulesFileStatus(snapshot), setup: await this.setupView(view), revision: `${snapshot.revision}:${reviewRevision}:${this.humanCopy?.revision ?? 0}` };
   }
 
   /**
    * The funnel's view of setup: the scan and the extraction run (the automatic refresh's status). `step` is what is
    * being extracted now, read from what has landed: goals first, then work (request groups), then rules (the story).
    */
-  private setupView(snapshot: WorkViewSnapshot) {
+  private async setupView(snapshot: WorkViewSnapshot) {
     const hosted = this.hostedIntent?.state();
-    if (hosted && hosted.state !== 'idle') return { scan: this.setupScan?.state() ?? null, work: this.setupWork(), extraction: hosted };
+    if (hosted && hosted.state !== 'idle') return { scan: this.setupScan?.state() ?? null, work: await this.setupWork(), extraction: hosted };
     const refresh = this.autoRefresh?.status() ?? null;
     const view = snapshot as unknown as { goals?: unknown; story?: { groups?: number; story?: unknown } | null };
     const step = refresh?.state !== 'running' ? null : !view.goals ? 'goals' : !view.story?.groups ? 'work' : 'rules';
     return {
       scan: this.setupScan?.state() ?? null,
-      work: this.setupWork(),
+      work: await this.setupWork(),
       extraction: refresh ? {
         state: refresh.state, reason: refresh.reason ?? null, step, agent: refresh.agent ?? null,
         startedAt: refresh.startedAt ?? null, finishedAt: refresh.finishedAt ?? null, error: refresh.error ?? null,
@@ -723,13 +824,14 @@ export class WorkViewRoutes extends BaseRouteHandler {
    * grouping has run. A review without evidence (state `unknown`, every new install) gives no percent, so no bar.
    * Re-read only when the ledger changes.
    */
-  private setupWork(): SetupWorkItem[] | null {
+  private async setupWork(): Promise<SetupWorkItem[] | null> {
     if (!this.ledgerDir) return null;
     const signature = ledgerSignature(this.ledgerDir);
     if (this.setupWorkCache?.signature === signature) return this.setupWorkCache.work;
     const ledger = readLedger(this.ledgerDir);
     const groupIds = Object.keys(ledger.groups.groups);
     let work: SetupWorkItem[] | null = null;
+    let readable = true;
     if (groupIds.length) {
       const conversationsOf = new Map<string, Array<[string, string]>>();
       for (const [key, groupId] of Object.entries(ledger.groups.conversations as Record<string, string>)) {
@@ -737,24 +839,30 @@ export class WorkViewRoutes extends BaseRouteHandler {
         if (!conversationsOf.has(groupId)) conversationsOf.set(groupId, []);
         conversationsOf.get(groupId)!.push([platform, contentSessionId]);
       }
-      const database = existsSync(this.databasePath) ? openSqliteDatabase(this.databasePath, { readonly: true, create: false }) : null;
+      // The prompt times are read by the reader, never on this thread: this runs on every view, and the ledger changes all through a refresh.
+      const conversations = [...conversationsOf.values()].flat();
+      let epochs = new Map<string, number>();
       try {
-        const lastPrompt = database?.prepare(`SELECT MAX(up.created_at_epoch) AS at FROM user_prompts up JOIN sdk_sessions s ON s.id = up.session_db_id
-          WHERE s.platform_source = ? AND s.content_session_id = ?`);
-        work = groupIds.map((groupId) => {
-          const group = ledger.groups.groups[groupId];
-          const lastEpoch = Math.max(0, ...(conversationsOf.get(groupId) ?? []).map(([platform, id]) => Number((lastPrompt?.get(platform, id) as { at: number | null } | null)?.at ?? 0)), group.anchorAsk?.atEpoch ?? 0);
-          const review = ledger.progress[groupId];
-          let platform: string | null = null;
-          try { platform = (JSON.parse(group.anchor) as string[])[1] ?? null; } catch { /* An anchor that is not a conversation key names no agent. */ }
-          return {
-            groupId, title: String(group.title), platform, lastActiveAt: lastEpoch ? new Date(lastEpoch).toISOString() : null,
-            progressPercent: review && review.state !== 'unknown' && Number.isFinite(review.percent) ? review.percent : null,
-          };
-        }).sort((left, right) => String(right.lastActiveAt ?? '').localeCompare(String(left.lastActiveAt ?? ''))).slice(0, SETUP_WORK_SHOWN);
-      } finally { database?.close(); }
+        const read = await this.reader.lastPrompts({ databasePath: this.databasePath, conversations });
+        epochs = new Map(conversations.map(([platform, id], index) => [JSON.stringify([platform, id]), read[index]]));
+      } catch (error) {
+        // A reader that failed leaves the times out, and the next view asks again: the failed answer is not kept.
+        readable = false;
+        logger.warn('HTTP', 'The work view reader failed reading prompt times for the setup work list', { error: error instanceof Error ? error.message : String(error) });
+      }
+      work = groupIds.map((groupId) => {
+        const group = ledger.groups.groups[groupId];
+        const lastEpoch = Math.max(0, ...(conversationsOf.get(groupId) ?? []).map(([platform, id]) => epochs.get(JSON.stringify([platform, id])) ?? 0), group.anchorAsk?.atEpoch ?? 0);
+        const review = ledger.progress[groupId];
+        let platform: string | null = null;
+        try { platform = (JSON.parse(group.anchor) as string[])[1] ?? null; } catch { /* An anchor that is not a conversation key names no agent. */ }
+        return {
+          groupId, title: String(group.title), platform, lastActiveAt: lastEpoch ? new Date(lastEpoch).toISOString() : null,
+          progressPercent: review && review.state !== 'unknown' && Number.isFinite(review.percent) ? review.percent : null,
+        };
+      }).sort((left, right) => String(right.lastActiveAt ?? '').localeCompare(String(left.lastActiveAt ?? ''))).slice(0, SETUP_WORK_SHOWN);
     }
-    this.setupWorkCache = { signature, work };
+    if (readable) this.setupWorkCache = { signature, work };
     return work;
   }
 
@@ -779,10 +887,10 @@ export class WorkViewRoutes extends BaseRouteHandler {
     renameSync(temp, this.rulesFilePath);
   }
 
-  private saveRule = (req: Request, res: Response): void => {
+  private saveRule = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { action, ruleId, rule } = req.body as z.infer<typeof ruleBody>;
     if (!this.appendWorkStateEntry) { res.status(503).json({ error: 'Saving rules is unavailable on this worker.' }); return; }
-    const snapshot = this.snapshot();
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before changing rules.' }); return; }
     const rules = (snapshot.rules ?? []) as SavedRule[];
     const current = ruleId ? rules.find(entry => entry.ruleId === ruleId) : undefined;
@@ -817,20 +925,20 @@ export class WorkViewRoutes extends BaseRouteHandler {
     }
     const project = this.homeProject ?? getProjectContext(homedir()).primary;
     for (const fields of rows) this.appendWorkStateEntry({ project, listName: MY_RULES_LIST, fields });
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     this.writeRulesFile((updated.rules ?? []) as SavedRule[]);
     logger.debug('HTTP', 'My Rules updated', { action });
     res.setHeader('Cache-Control', 'no-store');
     // The first row is the rule this change saved, so the page can name it without guessing from the snapshot.
     res.json({ ...updated, savedRuleId: rows[0].rule_id });
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
   /** The owner's focus decisions, saved as my-focus rows. Owner rows are never overridden by a refresh. */
-  private saveFocus = (req: Request, res: Response): void => {
+  private saveFocus = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { action, focusAreaId, name, goal, intoFocusAreaId, focusAreaIds, requestId } = req.body as z.infer<typeof focusBody>;
     if (!this.appendWorkStateEntry) { res.status(503).json({ error: 'Saving focus areas is unavailable on this worker.' }); return; }
-    const snapshot = this.snapshot();
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before changing focus areas.' }); return; }
     const areas = (snapshot.focusAreas ?? []) as FocusArea[];
     const areaById = new Map(areas.map(area => [area.focusAreaId, area]));
@@ -892,18 +1000,18 @@ export class WorkViewRoutes extends BaseRouteHandler {
     }
     const project = this.homeProject ?? getProjectContext(homedir()).primary;
     for (const fields of rows) this.appendWorkStateEntry({ project, listName: MY_FOCUS_LIST, fields });
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     logger.debug('HTTP', 'My Focus updated', { action });
     res.setHeader('Cache-Control', 'no-store');
     res.json(updated);
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
   /** Owner-goals' mined focus areas, as my-focus suggestions. Answers each mined area's id, in order. */
-  private suggestOwnerGoalsAreas = (req: Request, res: Response): void => {
+  private suggestOwnerGoalsAreas = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { areas } = req.body as z.infer<typeof ownerGoalsFocusBody>;
     if (!this.appendWorkStateEntry) { res.status(503).json({ error: 'Saving focus areas is unavailable on this worker.' }); return; }
-    const snapshot = this.snapshot();
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before saving focus areas.' }); return; }
     let planned: ReturnType<typeof ownerGoalsAreaRows>;
     try { planned = ownerGoalsAreaRows(areas, (snapshot.focusAreas ?? []) as FocusArea[]); }
@@ -913,17 +1021,30 @@ export class WorkViewRoutes extends BaseRouteHandler {
     logger.debug('HTTP', 'Owner-goals focus areas saved', { mined: areas.length, rows: planned.rows.length });
     res.setHeader('Cache-Control', 'no-store');
     res.json({ focusAreaIds: planned.focusAreaIds });
-    if (planned.rows.length) this.publish();
-  };
+    if (planned.rows.length) void this.publish();
+  });
 
   /**
    * The focus step's answer as my-focus rows: router placements and `suggested` areas, written as the system. The
    * whole answer is checked against the saved areas before the first row is written, so a refusal (TypeError)
    * writes nothing. The automatic refresh calls this in-process; the skill's CLI reaches it through saveRouterFocus.
    */
-  recordRouterFocus = (body: RouterFocusBody): { placed: number; focusAreaIds: string[] } => {
+  /**
+   * One change to the request ledger from the refresh job's thread (ledger-writes.mjs): this thread is the ledger's only writer, so the
+   * job sends each placement, `apply`, progress review and story here, and it is applied to the file as it is now, one at a time and in
+   * line with the owner's answers (answerSuggestion). Small JSON, no database: nothing here scans.
+   */
+  recordLedgerWrite = (op: LedgerWriteOp): Promise<LedgerWriteReply> => this.serialized(async () => {
+    if (!this.ledgerDir) throw new Error('The request ledger is unavailable on this worker.');
+    return applyLedgerWrite(this.ledgerDir, op);
+  });
+
+  recordRouterFocus = (body: RouterFocusBody): Promise<{ placed: number; focusAreaIds: string[] }> => this.serialized(async () => {
     if (!this.appendWorkStateEntry) throw new Error('Saving focus areas is unavailable on this worker.');
-    const snapshot = this.snapshot();
+    // The reader's view, not snapshot(): the areas and the connection are all this needs, and snapshot() reads the review sidecar
+    // once per request on this thread, which the refresh run must not do.
+    const snapshot = await this.readView();
+    this.lastSource = snapshot.source;
     if (!snapshot.source.connected) throw new Error('Local work is unavailable. Reconnect before placing requests.');
     let planned: ReturnType<typeof routerFocusRows>;
     // Every row is built and size-checked before the first write: a refusal here (an unknown or dismissed area, a row too
@@ -936,17 +1057,17 @@ export class WorkViewRoutes extends BaseRouteHandler {
       for (const fields of planned.rows) { this.appendWorkStateEntry({ project, listName: MY_FOCUS_LIST, fields }); written++; }
     } catch (error) {
       // A failure after a write is never a refusal: asking again would suggest the same areas twice.
-      if (written) this.publish();
+      if (written) void this.publish();
       throw new Error(`Saving the focus step stopped after ${written} of ${planned.rows.length} rows: ${error instanceof Error ? error.message : String(error)}`);
     }
     logger.debug('HTTP', 'Focus step saved', { placed: planned.placed, proposed: planned.focusAreaIds.length });
-    if (planned.rows.length) this.publish();
+    if (planned.rows.length) void this.publish();
     return { placed: planned.placed, focusAreaIds: planned.focusAreaIds };
-  };
+  });
 
-  private saveRouterFocus = (req: Request, res: Response): void => {
+  private saveRouterFocus = async (req: Request, res: Response): Promise<void> => {
     let saved: { placed: number; focusAreaIds: string[] };
-    try { saved = this.recordRouterFocus(req.body as z.infer<typeof routerFocusBody>); }
+    try { saved = await this.recordRouterFocus(req.body as z.infer<typeof routerFocusBody>); }
     catch (error) {
       if (error instanceof TypeError) { this.badRequest(res, error.message); return; }
       res.status(503).json({ error: error instanceof Error ? error.message : String(error) });
@@ -957,10 +1078,10 @@ export class WorkViewRoutes extends BaseRouteHandler {
   };
 
   /** The seed's rows, checked against the saved areas and placements before the first write (a refusal writes nothing). */
-  private saveSeedFocus = (req: Request, res: Response): void => {
+  private saveSeedFocus = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const body = req.body as z.infer<typeof seedFocusBody>;
     if (!this.appendWorkStateEntry) { res.status(503).json({ error: 'Saving focus areas is unavailable on this worker.' }); return; }
-    if (!this.snapshot().source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before seeding focus areas.' }); return; }
+    if (!(await this.snapshot()).source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before seeding focus areas.' }); return; }
     const served = existsSync(this.databasePath) ? realpathSync(this.databasePath) : this.databasePath;
     const expected = existsSync(body.databasePath) ? realpathSync(body.databasePath) : body.databasePath;
     if (served !== expected) { res.status(409).json({ error: `This worker serves ${served}, not ${expected}. Nothing was written.` }); return; }
@@ -977,12 +1098,12 @@ export class WorkViewRoutes extends BaseRouteHandler {
     let written = 0;
     try {
       for (const fields of planned.rows) { this.appendWorkStateEntry({ project, listName: MY_FOCUS_LIST, fields }); written++; }
-    } finally { if (written) this.publish(); }
+    } finally { if (written) void this.publish(); }
     logger.debug('HTTP', 'Focus seed saved', { action: body.action, rows: written });
     const { rows: _rows, ...result } = planned;
     res.setHeader('Cache-Control', 'no-store');
     res.json({ action: body.action, rows: written, ...result });
-  };
+  });
 
   /**
    * The owner says a subagent finished when no recorded stop covers it (one that
@@ -998,10 +1119,10 @@ export class WorkViewRoutes extends BaseRouteHandler {
     res.status(204).end();
   };
 
-  private markAgentFinished = (req: Request, res: Response): void => {
+  private markAgentFinished = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { agentGroupId } = req.body as z.infer<typeof markAgentFinishedBody>;
     if (!this.appendWorkStateEntry) { res.status(503).json({ error: 'Saving agent state is unavailable on this worker.' }); return; }
-    const snapshot = this.snapshot();
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before changing an agent.' }); return; }
     const agent = (snapshot.agents as Array<{ id: string; isSubagent?: boolean; canMarkFinished?: boolean; agentId: string | null; agentType: string | null; platformSource: string | null; contentSessionId: string | null; project: string }>)
       .find(entry => entry.id === agentGroupId);
@@ -1018,18 +1139,18 @@ export class WorkViewRoutes extends BaseRouteHandler {
       }),
     });
     logger.debug('HTTP', 'Agent marked finished by the owner');
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     res.setHeader('Cache-Control', 'no-store');
     res.json(updated);
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
   /**
    * The owner's Join / Not this on a judge suggestion, written to the request ledger through the same
    * decisions the request-progress skill's `apply` takes (request-judge.mjs decideSuggestion). The
    * database is only read: projects and first asks for the decision.
    */
-  private answerSuggestion = (req: Request, res: Response): void => {
+  private answerSuggestion = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { conversationKey, action } = req.body as z.infer<typeof suggestionBody>;
     if (!this.ledgerDir) { res.status(503).json({ error: 'Request suggestions are unavailable on this worker.' }); return; }
     if (!existsSync(this.databasePath)) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before answering a suggestion.' }); return; }
@@ -1039,15 +1160,15 @@ export class WorkViewRoutes extends BaseRouteHandler {
     finally { database.close(); }
     if (!outcome) { this.notFound(res, 'That suggestion is not waiting for an answer.'); return; }
     logger.debug('HTTP', 'Request suggestion answered', { action, status: outcome.status });
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     res.setHeader('Cache-Control', 'no-store');
     res.json(updated);
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
   /** Adds the MY-RULES.md import to the user-level CLAUDE.md once. Never touches a project's CLAUDE.md or AGENTS.md. */
-  private loadRulesInClaudeCode = (_req: Request, res: Response): void => {
-    const snapshot = this.snapshot();
+  private loadRulesInClaudeCode = (_req: Request, res: Response): Promise<void> => this.serialized(async () => {
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before loading rules.' }); return; }
     // Always from the saved rules: an existing file can predate rule changes received through sync.
     this.writeRulesFile((snapshot.rules ?? []) as SavedRule[]);
@@ -1059,15 +1180,15 @@ export class WorkViewRoutes extends BaseRouteHandler {
       mkdirSync(dirname(this.claudeInstructionsPath), { recursive: true });
       appendFileSync(this.claudeInstructionsPath, `${separator}${myRulesImportLine(this.rulesFilePath)}\n`);
     }
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     res.setHeader('Cache-Control', 'no-store');
     res.json(updated);
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
-  private review = (req: Request, res: Response): void => {
+  private review = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
     const { requestId, expectedFingerprint, checked } = req.body as z.infer<typeof reviewBody>;
-    const snapshot = this.snapshot();
+    const snapshot = await this.snapshot();
     if (!snapshot.source.connected) { res.status(503).json({ error: 'Local work is unavailable. Reconnect before reviewing.' }); return; }
     const request = snapshot.humanRequests.find(item => item.id === requestId);
     if (!request) { this.notFound(res, 'Request is outside the loaded work.'); return; }
@@ -1079,13 +1200,13 @@ export class WorkViewRoutes extends BaseRouteHandler {
     if (checked && !isReportedReadyForCheck(request)) { res.status(409).json({ error: 'This request has not been reported complete.', snapshot }); return; }
     this.reviews.set(requestId, expectedFingerprint, checked);
     logger.debug('HTTP', 'Local work review updated', { checked });
-    const updated = this.snapshot();
+    const updated = await this.snapshot();
     res.setHeader('Cache-Control', 'no-store');
     res.json(updated);
-    this.publish(updated);
-  };
+    void this.publish(updated);
+  });
 
-  private events = (req: Request, res: Response): void => {
+  private events = async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
@@ -1099,13 +1220,20 @@ export class WorkViewRoutes extends BaseRouteHandler {
       req.off('close', cleanup);
       res.off('close', cleanup);
       socket?.off('close', cleanup);
-      if (!this.clients.size) this.stopTimers();
+      if (!this.clients.size) this.stopClientTimers();
     };
     req.on('close', cleanup);
     res.on('close', cleanup);
     socket?.on('close', cleanup);
     res.on('error', () => { cleanup(); res.destroy(); });
-    this.send(res, 'work-view', this.snapshot());
+    try { this.send(res, 'work-view', await this.snapshot()); }
+    catch (error) {
+      // The stream is already open, so a failed first read ends it; the page reconnects after `retry`.
+      logger.warn('HTTP', 'The work view stream could not read its first snapshot', { error: error instanceof Error ? error.message : String(error) });
+      cleanup();
+      res.end();
+      return;
+    }
     const scan: SetupScanState | undefined = this.setupScan?.state();
     if (scan && scan.phase !== 'idle') this.send(res, 'setup-scan', scan);
     // A reconnecting setup page may have missed checkout being paid or an import finishing: send where setup stands.
@@ -1116,12 +1244,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     } catch (error) {
       logger.error('HTTP', 'Setup state could not be read for a new event stream', {}, error as Error);
     }
-    if (!this.poll) this.poll = setInterval(() => this.publish(), this.pollIntervalMs);
-    if (!this.heartbeat) this.heartbeat = setInterval(() => {
-      const snapshot = this.snapshot();
-      for (const client of this.clients) this.send(client, 'heartbeat', { at: new Date().toISOString(), source: snapshot.source });
-    }, 15000);
-    this.poll?.unref(); this.heartbeat?.unref();
+    if (this.clients.has(res)) this.startClientTimers();
   };
 
   private send(res: Response, event: string, value: unknown): void {
@@ -1132,34 +1255,84 @@ export class WorkViewRoutes extends BaseRouteHandler {
     catch { this.clients.delete(res); res.destroy(); }
   }
 
-  private publish(snapshot = this.snapshot()): void {
-    if (this.closed) return;
-    // rulesFile changes without a new revision when the rules are loaded in Claude Code; other tabs must still see it.
-    const signature = JSON.stringify([snapshot.revision, snapshot.source.connected, snapshot.source.error, snapshot.setup, snapshot.rulesFile]);
-    if (signature === this.signature) return;
-    this.signature = signature;
-    for (const client of this.clients) this.send(client, 'work-view', snapshot);
+  /**
+   * Everything that scans or polls runs only while a viewer is connected: the stream's poll and heartbeat, the card
+   * wording pump, and the automatic refresh. With nobody watching, nothing here touches the database. It runs once while
+   * any stream is open; a reconnecting page (the stream retries every second) resumes the workers it stopped rather
+   * than restarting them.
+   */
+  private startClientTimers(): void {
+    if (this.closed || this.poll) return;
+    this.poll = setInterval(() => { void this.pollOnce(); }, this.pollIntervalMs);
+    this.heartbeat = setInterval(() => this.sendHeartbeat(), HEARTBEAT_MS);
+    this.poll.unref(); this.heartbeat.unref();
+    // The wording cache is loaded before the pump starts, so a cached card is never generated again.
+    void this.humanCopyLoaded.then(() => { if (this.clients.size && !this.closed) this.humanCopy?.start(); });
+    this.autoRefresh?.start();
   }
 
-  private stopTimers(): void {
-    if (this.poll) clearInterval(this.poll);
+  /** Idempotent: a closing stream reports from its request, its response and its socket. */
+  private stopClientTimers(): void {
+    if (!this.poll) return;
+    clearInterval(this.poll);
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.poll = null; this.heartbeat = null;
+    this.humanCopy?.stop();
+    this.autoRefresh?.stop();
+  }
+
+  /** The heartbeat only proves the stream is alive: it reports the source as the last read saw it and never reads. */
+  private sendHeartbeat(): void {
+    if (!this.lastSource) return;
+    for (const client of this.clients) this.send(client, 'heartbeat', { at: new Date().toISOString(), source: this.lastSource });
+  }
+
+  /** One poll tick. A tick that finds the previous read still running does nothing, so slow reads never stack up. */
+  private async pollOnce(): Promise<void> {
+    if (this.polling || this.closed || !this.clients.size) return;
+    this.polling = true;
+    try {
+      // A timer created inside the stream's request keeps that request's SQL scope; the poll names its own.
+      await runWithSqlScope('work-view.poll', () => this.publish());
+    } catch (error) {
+      if (!this.closed) logger.warn('HTTP', 'The work view poll failed', { error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  /** Sends the view to every connected page when it changed. With nobody connected it reads nothing. */
+  private async publish(snapshot?: WorkViewSnapshot): Promise<void> {
+    if (this.closed || !this.clients.size) return;
+    const view = snapshot ?? await this.snapshot();
+    if (this.closed) return;
+    // rulesFile changes without a new revision when the rules are loaded in Claude Code; other tabs must still see it.
+    const signature = JSON.stringify([view.revision, view.source.connected, view.source.error, view.setup, view.rulesFile]);
+    if (signature === this.signature) return;
+    this.signature = signature;
+    for (const client of this.clients) this.send(client, 'work-view', view);
   }
 
   getClientCount(): number { return this.clients.size; }
 
-  close(): void {
+  /**
+   * Stops everything. The reader is closed last and without waiting for reads in flight: they reject, and nothing
+   * publishes after `closed`. The promise settles once the reader's thread has been told to stop and never rejects.
+   */
+  close(): Promise<void> {
     this.closed = true;
     this.unsubscribeSetupScan?.();
     this.unsubscribeHistoryImport?.();
     this.stopRulesSync();
-    this.stopTimers();
+    this.stopClientTimers();
     for (const client of this.clients) client.end();
     this.clients.clear();
     this.source.close();
     this.reviews.close();
     this.humanCopy?.close();
     this.autoRefresh?.close();
+    return this.reader.close().catch(error => {
+      logger.warn('HTTP', 'The work view reader did not close cleanly', { error: error instanceof Error ? error.message : String(error) });
+    });
   }
 }

@@ -4,7 +4,7 @@ import { buildHumanRequests } from './request-projection.mjs';
 import { goalKindOf, OWNER_GOALS_LIST, isOwnerGoalsList } from './owner-goals.mjs';
 import { buildRules, isMyRulesList } from './my-rules.mjs';
 import { buildFocusAreas, isMyFocusList, placeRequests } from './my-focus.mjs';
-import { isWorkProductField, productsFromFields, readProductRecords } from './work-product.mjs';
+import { distinctToolNames, isWorkProductField, likeMatcher, productsFromFields, readProductRecords } from './work-product.mjs';
 import { agentStopFor, isAgentLifecycleList, readAgentStops } from './agent-lifecycle.mjs';
 import { withDerivedProjects } from './session-project.mjs';
 const PROJECT_KEY = (value) => String(value ?? '').replace(/[A-Z]/g, (c) => c.toLowerCase());
@@ -56,16 +56,17 @@ function safeRead(database, sql, params = []) {
   }
 }
 
+/**
+ * What the recorded activity looks like right now, cheaply: the newest id of each table, and SQLite's connection-local
+ * `data_version`. No COUNT or SUM: those read every row of a table that holds years of history. This reader never
+ * writes, and `data_version` changes whenever another connection commits, including an update or a delete that keeps
+ * the newest id, so the signature changes with any write to the database.
+ */
 export function activitySignature(database) {
-  const heads = ['observations', 'session_summaries', 'tool_uses', 'user_prompts'].map((table) => {
-    const row = safeRead(database, `SELECT MAX(id) AS id, COUNT(*) AS count FROM ${table}`)[0];
-    return `${table}:${row?.id ?? 0}:${row?.count ?? 0}`;
+  const heads = ['observations', 'session_summaries', 'tool_uses', 'user_prompts', 'sdk_sessions'].map((table) => {
+    const row = safeRead(database, `SELECT MAX(id) AS id FROM ${table}`)[0];
+    return `${table}:${row?.id ?? 0}`;
   });
-  const sessions = safeRead(database, `SELECT MAX(id) AS id, COUNT(*) AS count, MAX(completed_at_epoch) AS completed,
-    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active FROM sdk_sessions`)[0];
-  heads.push(`sessions:${sessions?.id ?? 0}:${sessions?.count ?? 0}:${sessions?.completed ?? 0}:${sessions?.active ?? 0}`);
-  // This reader never writes. SQLite's connection-local data_version changes
-  // when another connection commits, including edits that keep row IDs/counts.
   const version = safeRead(database, 'PRAGMA data_version')[0]?.data_version ?? 0;
   heads.push(`data:${version}`);
   return heads.join('|');
@@ -79,9 +80,12 @@ export const REQUEST_WINDOW_MS = 14 * 86400000;
 export function readAgentRecords(database, { observationLimit = 300, summaryLimit = 100, workCallLimit = 5000, requestSessionLimit = 600, workState, ledger = null, now = Date.now() } = {}) {
   const recentWorkTimes = workState?.lists.flatMap((list) => [list.stateUpdatedAtEpoch, ...list.tasks.map((task) => task.updatedAtEpoch)]).filter(Boolean).sort((a, b) => b - a).slice(0, 240);
   const workSinceEpoch = recentWorkTimes?.length ? recentWorkTimes.at(-1) - 5000 : 0;
-  const calls = safeRead(database, `SELECT id, project, platform_source, agent_id, agent_type, session_db_id, memory_session_id, content_session_id, prompt_number, tool_input, created_at_epoch
-    FROM tool_uses WHERE tool_name IN (SELECT DISTINCT tool_name FROM tool_uses WHERE tool_name LIKE '%work_state_write%')
-    AND created_at_epoch >= ? ORDER BY id DESC LIMIT ?`, [workSinceEpoch, workCallLimit]);
+  // The tool names are found by a loose index scan: the subquery this replaces scanned every tool_uses row.
+  const matchesWorkStateWrite = likeMatcher('%work_state_write%');
+  const workStateWriteNames = distinctToolNames((sql, params) => safeRead(database, sql, params), matchesWorkStateWrite);
+  const calls = workStateWriteNames.length ? safeRead(database, `SELECT id, project, platform_source, agent_id, agent_type, session_db_id, memory_session_id, content_session_id, prompt_number, tool_input, created_at_epoch
+    FROM tool_uses WHERE tool_name IN (${workStateWriteNames.map(() => '?')})
+    AND created_at_epoch >= ? ORDER BY id DESC LIMIT ?`, [...workStateWriteNames, workSinceEpoch, workCallLimit]) : [];
   const observations = safeRead(database, `SELECT id, project, memory_session_id, content_session_id, agent_id, agent_type, prompt_number, title, subtitle, type, created_at_epoch
     FROM observations ORDER BY created_at_epoch DESC, id DESC LIMIT ?`, [observationLimit]);
   const summaries = safeRead(database, `SELECT id, project, memory_session_id, prompt_number, request, completed, next_steps, created_at_epoch
@@ -95,7 +99,7 @@ export function readAgentRecords(database, { observationLimit = 300, summaryLimi
   const columns = 'id, project, platform_source, content_session_id, memory_session_id, user_prompt, custom_title, status, started_at_epoch, completed_at_epoch';
   const loaded = new Map((predicates.length ? safeRead(database, `SELECT ${columns} FROM sdk_sessions WHERE ${predicates.join(' OR ')}`, args) : []).map((session) => [session.id, session]));
   const recentAsks = safeRead(database, `SELECT ${columns} FROM sdk_sessions WHERE id IN (
-    SELECT session_db_id FROM user_prompts WHERE created_at_epoch >= ? GROUP BY session_db_id ORDER BY MAX(created_at_epoch) DESC LIMIT ?)`, [now - REQUEST_WINDOW_MS, requestSessionLimit]);
+    SELECT session_db_id FROM user_prompts WHERE created_at_epoch >= ? GROUP BY +session_db_id ORDER BY MAX(created_at_epoch) DESC LIMIT ?)`, [now - REQUEST_WINDOW_MS, requestSessionLimit]);
   const grouped = Object.keys(ledger?.groups?.conversations ?? {}).flatMap((key) => {
     try { const parsed = JSON.parse(key); return parsed?.[0] === 'conversation' && parsed.length === 3 ? [[parsed[1], parsed[2]]] : []; } catch { return []; }
   });

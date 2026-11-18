@@ -18,7 +18,7 @@ import { isCmemGatewayUrl, isKeyAllowedForEndpoint } from '../../shared/cmem-gat
 import { isOpenRouterApiUrl, resolveOpenRouterChatCompletionsUrl } from '../../shared/openrouter-base-url.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
-import { applyDecisions, groupIdFor, groupingInput, LEDGER_DIR, readCandidates, readLedger, writeJsonAtomic } from './request-groups.mjs';
+import { applyDecisions, applyDecisionsWith, databaseLookups, groupIdFor, groupingInput, LEDGER_DIR, readAgentWrittenPromptIds, readCandidates, readGroupsFile, readLedger, writeJsonAtomic } from './request-groups.mjs';
 import { humanRequestTitle, requestText } from './request-projection.mjs';
 
 const DAY_MS = 86400000;
@@ -214,6 +214,38 @@ function ownTitle(openingAsk) {
   return humanRequestTitle(openingAsk) || requestText(openingAsk, 120) || 'Untitled request';
 }
 
+/**
+ * One conversation's placement in `stored`, the ledger as it is NOW (pure: nothing is read or written). `picked` is the request
+ * the judge chose as it was offered ({groupId, anchor, title}); an owner Join meanwhile may have moved it into another request, so
+ * its anchor and title are whichever request now holds the anchor it was offered with. Returns `{ next, outcome }`: `next` is the
+ * ledger to write (null when nothing changes) and `outcome` is `{ skip: true }` (already decided), `{ unplaced }` (the picked
+ * request left the ledger) or `{ target, suggested, title }`.
+ */
+export function placeConversation(stored, { key, verdict, picked, root, title }, { now, lookups }) {
+  if (stored.conversations[key] || stored.ignored?.[key]) return { next: null, outcome: { skip: true } };
+  const live = (request) => {
+    const id = request && stored.conversations[request.anchor];
+    const group = id && stored.groups[id];
+    return group ? { groupId: id, anchor: group.anchor, title: group.title } : null;
+  };
+  const target = verdict.band === 'join' ? live(picked) : null;
+  if (verdict.band === 'join' && !target) return { next: null, outcome: { unplaced: `the picked request ${verdict.requestId} left the ledger while the judge was asked` } };
+  const decisions = target
+    ? { groups: [{ title: target.title, conversations: [target.anchor, key], links: [{ kind: 'judge', conversations: [target.anchor, key], evidence: verdict.evidence }], ...(typeof root === 'string' && root ? { projectRoot: root } : {}) }] }
+    : { groups: [{ title, conversations: [key] }] };
+  const next = applyDecisionsWith(stored, decisions, now, lookups);
+  const suggested = verdict.band === 'suggest' ? live(picked) : null;
+  if (suggested) next.suggestions = { ...(next.suggestions ?? {}), [key]: { requestId: suggested.groupId, confidence: verdict.confidence, evidence: verdict.evidence, judge: verdict.judge, at: iso(now), status: 'open' } };
+  return { next, outcome: { target, suggested, title } };
+}
+
+/** placeConversation against the ledger file as it is now, written when the placement changes it (one synchronous read-modify-write). */
+export function writePlacement(dir, placement, { now, lookups }) {
+  const { next, outcome } = placeConversation(readGroupsFile(dir), placement, { now, lookups });
+  if (next) writeJsonAtomic(join(dir, 'request-groups.json'), next);
+  return outcome;
+}
+
 /** Route every undecided conversation of the window, earliest first, one project root at a time:
  * `rules` first, then `judge` (Jev) when the install has one. A join writes the conversation into the
  * request through the same decisions `apply` takes, with a `judge` link whose evidence names the judge
@@ -221,8 +253,10 @@ function ownTitle(openingAsk) {
  * and keeps the pick in the ledger's `suggestions` for the owner; `new` makes it its own request. A
  * conversation no judge can place (no code link and no Jev, a refused or failed call) stays undecided
  * for the grouping agent. With `apply` the ledger is written after every decision; otherwise this is
- * the plan, decided as if each earlier decision had been written. */
-export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = Date.now(), days = 14, apply = false }) {
+ * the plan, decided as if each earlier decision had been written. `ledger` writes the placements of an applied run: undefined
+ * writes the file here (this process owns its writes); the refresh job passes the writer that sends each one to the main thread
+ * (ledger-writes.mjs remoteLedgerWriter), which applies it to the ledger as it is then. */
+export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = Date.now(), days = 14, apply = false, ledger: ledgerWriter = null }) {
   const judges = [rulesJudge, ...(judge ? [judge] : [])];
   const ledger = readLedger(dir);
   const sinceEpoch = now - days * DAY_MS;
@@ -230,7 +264,8 @@ export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null,
   const skip = new Set();
   const routed = [], unplaced = [];
   let working = ledger.groups;
-  const persist = () => { if (apply) writeJsonAtomic(join(dir, 'request-groups.json'), working); };
+  const lookups = databaseLookups(database, ledger.agentWrittenPromptIds);
+  const writer = ledgerWriter ?? { place: (placement, { now: at }) => writePlacement(dir, placement, { now: at, lookups }) };
   for (;;) {
     const input = groupingInput({ ...ledger, groups: working }, database, { sinceEpoch, limit: Infinity, skip });
     if (!input.conversations.length) break;
@@ -241,6 +276,24 @@ export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null,
       groupId: request.groupId, title: request.title, anchor: request.anchor,
       context: { title: request.title, ...context(request.anchor, { project: anchors.get(request.anchor)?.project ?? null, startedAt: anchors.get(request.anchor)?.startedAt ?? null }) },
     }));
+    // One conversation's placement. A plan decides it against `working`, in memory. An applied run hands it to the ledger's writer, which
+    // applies it to the ledger as it is when the write happens (the owner may have answered a suggestion while the judge was awaited,
+    // and that answer must survive); `working` is then read again, so the next conversations are decided against what was written.
+    const place = async (key, verdict, conversation) => {
+      const picked = verdict.requestId ? openRequests.find((request) => request.groupId === verdict.requestId) : null;
+      const placement = {
+        key, verdict, root, title: ownTitle(conversation.openingAsk),
+        picked: picked ? { groupId: picked.groupId, anchor: picked.anchor, title: picked.title } : null,
+      };
+      if (!apply) {
+        const { next, outcome } = placeConversation(working, placement, { now, lookups });
+        if (next) working = next;
+        return outcome;
+      }
+      const outcome = await writer.place(placement, { database, now });
+      working = readGroupsFile(dir);
+      return outcome;
+    };
     for (const conversation of input.conversations) {
       const key = conversation.conversationKey;
       const judged = {
@@ -261,35 +314,14 @@ export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null,
         skip.add(key);
         continue;
       }
-      // Applied runs re-read the ledger before each write: the owner may have answered a suggestion (or
-      // another run decided this conversation) while the judge was awaited, and that answer must survive.
-      // Between this read and persist() nothing is awaited, so no other write can land in between.
-      if (apply) {
-        working = readLedger(dir).groups;
-        if (working.conversations[key] || working.ignored?.[key]) { skip.add(key); continue; }
-      }
-      // The request picked, as the ledger holds it now: an owner Join meanwhile may have moved it into another
-      // request, so its anchor (and title) is whichever request now holds the anchor it was offered with.
-      const live = (request) => {
-        const id = request && working.conversations[request.anchor];
-        const group = id && working.groups[id];
-        return group ? { ...request, groupId: id, anchor: group.anchor, title: group.title } : null;
-      };
-      const picked = verdict.requestId ? openRequests.find((request) => request.groupId === verdict.requestId) : null;
-      const target = verdict.band === 'join' ? live(picked) : null;
-      if (verdict.band === 'join' && !target) {
-        unplaced.push({ conversationKey: key, root, openingAsk: conversation.openingAsk, reason: `the picked request ${verdict.requestId} left the ledger while the judge was asked` });
+      const placement = await place(key, verdict, conversation);
+      if (placement.skip) { skip.add(key); continue; }
+      if (placement.unplaced) {
+        unplaced.push({ conversationKey: key, root, openingAsk: conversation.openingAsk, reason: placement.unplaced });
         skip.add(key);
         continue;
       }
-      const title = ownTitle(conversation.openingAsk);
-      const decisions = target
-        ? { groups: [{ title: target.title, conversations: [target.anchor, key], links: [{ kind: 'judge', conversations: [target.anchor, key], evidence: verdict.evidence }], ...(typeof root === 'string' && root ? { projectRoot: root } : {}) }] }
-        : { groups: [{ title, conversations: [key] }] };
-      working = applyDecisions(working, decisions, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
-      const suggested = verdict.band === 'suggest' ? live(picked) : null;
-      if (suggested) working.suggestions = { ...(working.suggestions ?? {}), [key]: { requestId: suggested.groupId, confidence: verdict.confidence, evidence: verdict.evidence, judge: verdict.judge, at: iso(now), status: 'open' } };
-      persist();
+      const { target, suggested, title } = placement;
       // A request started here is the newest, so later conversations of the root may join it.
       if (!target) openRequests = [{ groupId: groupIdFor(key), title, anchor: key, context: { title, ...judged.context } }, ...openRequests];
       routed.push({
@@ -308,8 +340,10 @@ export async function routeUndecided({ dir = LEDGER_DIR, database, judge = null,
  * the owner declined. Null when no open suggestion exists for the conversation. */
 export function decideSuggestion({ dir, database, conversationKey, action, now = Date.now() }) {
   if (!['join', 'not-this'].includes(action)) throw new TypeError(`action must be join or not-this, got ${action}.`);
-  const ledger = readLedger(dir);
-  const groups = ledger.groups;
+  // One synchronous read-modify-write on the worker's main thread, the ledger's only writer: the refresh job's placements reach the
+  // same thread as messages and are applied the same way, so neither undoes the other.
+  const groups = readGroupsFile(dir);
+  const excludedPromptIds = readAgentWrittenPromptIds(dir);
   const suggestion = groups.suggestions?.[conversationKey];
   if (!suggestion || suggestion.status !== 'open') return null;
   const request = groups.groups[suggestion.requestId];
@@ -328,7 +362,7 @@ export function decideSuggestion({ dir, database, conversationKey, action, now =
       title: request.title, conversations: [request.anchor, conversationKey, ...brought],
       links: [{ kind: 'judge', conversations: [request.anchor, conversationKey], evidence: `Owner joined on the judge's suggestion. ${suggestion.evidence}` }, ...broughtLinks],
       ...(typeof request.projectRoot === 'string' && request.projectRoot ? { projectRoot: request.projectRoot } : {}),
-    }] }, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
+    }] }, { database, now, excludedPromptIds });
     next.suggestions[conversationKey] = { ...suggestion, status: 'joined', resolvedAt: iso(now) };
     // Open suggestions aimed at the request this Join absorbed now point at the request that holds it.
     if (ownId && !next.groups[ownId]) for (const [other, entry] of Object.entries(next.suggestions)) {
@@ -337,8 +371,8 @@ export function decideSuggestion({ dir, database, conversationKey, action, now =
   } else {
     if (groups.conversations[conversationKey]) next = structuredClone(groups);
     else {
-      const [candidate] = readCandidates(database, { conversationKeys: [conversationKey], excludedPromptIds: ledger.agentWrittenPromptIds });
-      next = applyDecisions(groups, { groups: [{ title: ownTitle(candidate?.firstAsk ?? ''), conversations: [conversationKey] }] }, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
+      const [candidate] = readCandidates(database, { conversationKeys: [conversationKey], excludedPromptIds });
+      next = applyDecisions(groups, { groups: [{ title: ownTitle(candidate?.firstAsk ?? ''), conversations: [conversationKey] }] }, { database, now, excludedPromptIds });
     }
     next.suggestions = { ...(next.suggestions ?? {}), [conversationKey]: { ...suggestion, status: 'declined', resolvedAt: iso(now), evidence: `Owner declined: not part of "${request?.title ?? suggestion.requestId}". ${suggestion.evidence}` } };
     next.updatedAt = iso(now);

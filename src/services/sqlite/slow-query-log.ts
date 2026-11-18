@@ -162,17 +162,18 @@ export function instrumentSlowQueries(db: Database, options: SlowQueryLogOptions
     if (!statementSql.has(statement)) statementSql.set(statement, sql);
     if (instrumentedStatements.has(statement)) return statement;
     instrumentedStatements.add(statement);
+    const patchableStatement = statement as unknown as Record<string, unknown>;
     for (const method of STATEMENT_METHODS) {
-      const original = (statement as unknown as Record<string, (...args: unknown[]) => unknown>)[method];
+      const original = patchableStatement[method] as ((...args: unknown[]) => unknown) | undefined;
       if (typeof original !== 'function') continue;
-      (statement as unknown as Record<string, unknown>)[method] = function slowQueryPatched(...args: unknown[]): unknown {
+      patchableStatement[method] = function slowQueryPatched(...args: unknown[]): unknown {
         const site = depth === 0 ? captureSite() : undefined;
         return slowQueryTimed(site, method, statement, () => original.apply(statement, args));
       };
     }
-    const iterate = (statement as unknown as Record<string, unknown>).iterate;
+    const iterate = patchableStatement.iterate;
     if (typeof iterate === 'function') {
-      (statement as unknown as Record<string, unknown>).iterate = function slowQueryPatched(...args: unknown[]): unknown {
+      patchableStatement.iterate = function slowQueryPatched(...args: unknown[]): unknown {
         const site = takeHandedSite() ?? captureSite();
         return slowQueryIterate(statement, iterate as (...a: unknown[]) => Iterable<unknown>, args, site);
       };

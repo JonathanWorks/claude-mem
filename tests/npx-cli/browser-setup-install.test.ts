@@ -118,7 +118,7 @@ const extraction = {
   running: false,
   restartsWhileRunning: 0,
   status() { return this.running ? { state: 'running', pid: process.pid, reason: 'setup-scan', startedAt: new Date().toISOString() } : null; },
-  start() {}, close() {}, async runNow() { return 'idle'; },
+  start() {}, stop() {}, close() {}, async runNow() { return 'idle'; },
 };
 async function startFixtureWorker(): Promise<void> {
   if (worker) return;

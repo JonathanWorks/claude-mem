@@ -198,6 +198,10 @@ export function createToolUsesSchema(db: Database): void {
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_session_db_id ON tool_uses(session_db_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_tool_name ON tool_uses(tool_name)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_created_at_epoch ON tool_uses(created_at_epoch)');
+  // The work view's publishing and git reads: a tool name (or a handful) over a time range. No schema_versions row and no
+  // LATEST_SCHEMA_VERSION bump: an index changes no data, and a newer stamp would make a rollback to a worker that knows
+  // the older version refuse this database.
+  db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_name_created ON tool_uses(tool_name, created_at_epoch)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_observation_id ON tool_uses(observation_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tool_uses_or_generation_id ON tool_uses(or_generation_id)');
   ensureToolUseSummaryColumns(db);

@@ -163,8 +163,15 @@ export class HumanCopyWorker {
     } catch { /* Cold or invalid cache: source data stays available. */ }
   }
 
-  start() { this.timer = setInterval(() => this.pump(), 1000); this.timer.unref(); }
-  close() { this.closed = true; clearInterval(this.timer); this.pending.clear(); }
+  /** Starts the one-second pump; a second call keeps the running timer. */
+  start() {
+    if (this.timer || this.closed) return;
+    this.timer = setInterval(() => this.pump(), 1000);
+    this.timer.unref();
+  }
+  /** Stops the pump and keeps the cache, the queue and the failures, so a later start() picks up where this left off. */
+  stop() { clearInterval(this.timer); this.timer = null; }
+  close() { this.closed = true; this.stop(); this.pending.clear(); }
   /** The GUI's subsidized setup must not start display-copy calls on the owner's token plan. */
   pauseWhile(shouldPause) { this.shouldPause = shouldPause; }
 

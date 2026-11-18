@@ -1,13 +1,25 @@
 import { existsSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
-import type { ContextReadMethods, ContextReadReply, ContextReadRequest, ContextReadResult, ContextRenderRequest } from './ContextReadProtocol.js';
+import {
+  rebuildError, serializeError,
+  type ContextReadCallbackHandlers, type ContextReadCallbackRequest, type ContextReadCallbackResult, type ContextReadMethods,
+  type ContextReadReply, type ContextReadRequest, type ContextReadResult, type ContextRenderRequest,
+} from './ContextReadProtocol.js';
 import type { WorkStateEntry } from '../sqlite/work-state.js';
 import type { ObservationSearchResult, SearchOptions, SessionSummarySearchResult, UserPromptSearchResult } from '../sqlite/types.js';
+import type { RefreshNeeds } from '../work-view/request-groups.mjs';
+import type { LastPromptsInput, RefreshNeedsInput, WorkViewReadInput, WorkViewRulesResult } from '../work-view/work-view-sources.js';
+import type { RefreshJobRunInput, RefreshJobRunResult, RefreshJobStartInput } from '../work-view/refresh-job-host.js';
 import { CONTEXT_PLACEHOLDER_NONCE } from '../../shared/context-cache.js';
 
 const MAX_PENDING_READS = 64;
 
-type PendingRead = { resolve(value: unknown): void; reject(error: Error): void };
+type PendingRead = {
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+  /** Answers the worker's callbacks while this request runs (the refresh job's agent questions, my-focus write and ledger changes). */
+  handlers?: ContextReadCallbackHandlers;
+};
 
 export class ContextReadWorkerClient {
   private worker: Worker | null = null;
@@ -47,6 +59,35 @@ export class ContextReadWorkerClient {
     return this.request('searchUserPrompts', { query, options });
   }
 
+  async workViewRead(input: WorkViewReadInput): Promise<string> {
+    return this.request('workViewRead', input);
+  }
+
+  async workViewRules(input: WorkViewReadInput): Promise<WorkViewRulesResult> {
+    return this.request('workViewRules', input);
+  }
+
+  async workViewRefreshNeeds(input: RefreshNeedsInput): Promise<RefreshNeeds> {
+    return this.request('workViewRefreshNeeds', input);
+  }
+
+  async workViewLastPrompts(input: LastPromptsInput): Promise<number[]> {
+    return this.request('workViewLastPrompts', input);
+  }
+
+  async refreshJobStart(input: RefreshJobStartInput): Promise<null> {
+    return this.request('refreshJobStart', input);
+  }
+
+  async refreshJobPrepare(): Promise<null> {
+    return this.request('refreshJobPrepare', null);
+  }
+
+  /** `handlers` answer the job's callbacks (an agent question, the my-focus write, a ledger change) on this thread while it runs. */
+  async refreshJobRun(input: RefreshJobRunInput, handlers: ContextReadCallbackHandlers): Promise<RefreshJobRunResult> {
+    return this.request('refreshJobRun', input, handlers);
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     const worker = this.worker;
@@ -65,12 +106,13 @@ export class ContextReadWorkerClient {
       ?? new URL('./context-read-worker.js', import.meta.url);
     const worker = new Worker(entry, { workerData: { contextPlaceholderNonce: CONTEXT_PLACEHOLDER_NONCE } });
     this.worker = worker;
-    worker.on('message', (reply: ContextReadReply) => {
-      const request = this.pending.get(reply.id);
+    worker.on('message', (message: ContextReadReply | ContextReadCallbackRequest) => {
+      if ('callback' in message) { void this.answerCallback(worker, message); return; }
+      const request = this.pending.get(message.id);
       if (!request) return;
-      this.pending.delete(reply.id);
-      if (reply.ok) request.resolve(reply.result);
-      else request.reject(Object.assign(new Error(reply.error.message), { name: reply.error.name }));
+      this.pending.delete(message.id);
+      if (message.ok) request.resolve(message.result);
+      else request.reject(rebuildError(message.error));
       if (this.pending.size === 0) worker.unref();
     });
     worker.on('error', error => {
@@ -80,15 +122,30 @@ export class ContextReadWorkerClient {
     return worker;
   }
 
+  /** Runs the callback a request's worker asked for, and posts the answer (or the error, as it was thrown) back to the thread. */
+  private async answerCallback(worker: Worker, message: ContextReadCallbackRequest): Promise<void> {
+    const handler = this.pending.get(message.id)?.handlers?.[message.callback] as ((input: unknown) => Promise<unknown>) | undefined;
+    let answer: ContextReadCallbackResult;
+    try {
+      if (!handler) throw new Error(`The ${message.callback} callback has no handler on request ${message.id}.`);
+      answer = { callbackResult: true, callbackId: message.callbackId, ok: true, result: await handler(message.input) };
+    } catch (error) {
+      answer = { callbackResult: true, callbackId: message.callbackId, ok: false, error: serializeError(error) };
+    }
+    // The thread may have been closed or replaced while the callback ran; its pending reads were rejected then.
+    if (this.worker === worker) worker.postMessage(answer);
+  }
+
   private request<Method extends keyof ContextReadMethods>(
     method: Method,
     input: ContextReadMethods[Method]['input'],
+    handlers?: ContextReadCallbackHandlers,
   ): Promise<ContextReadMethods[Method]['result']> {
     if (this.pending.size >= MAX_PENDING_READS) return Promise.reject(new Error('Context reader queue is full'));
     const worker = this.getWorker();
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve: value => resolve(value as ContextReadMethods[Method]['result']), reject });
+      this.pending.set(id, { resolve: value => resolve(value as ContextReadMethods[Method]['result']), reject, handlers });
       worker.ref();
       try {
         worker.postMessage({ id, method, input } as ContextReadRequest);

@@ -2586,8 +2586,10 @@ __export(request_judge_exports, {
   jevClientFromSettings: () => jevClientFromSettings,
   jevJudge: () => jevJudge,
   judgeConversation: () => judgeConversation,
+  placeConversation: () => placeConversation,
   routeUndecided: () => routeUndecided,
-  rulesJudge: () => rulesJudge
+  rulesJudge: () => rulesJudge,
+  writePlacement: () => writePlacement
 });
 import { join as join8 } from "node:path";
 function bandFor(confidence) {
@@ -2714,7 +2716,27 @@ async function judgeConversation(conversation, openRequests, judge) {
 function ownTitle(openingAsk) {
   return humanRequestTitle(openingAsk) || requestText(openingAsk, 120) || "Untitled request";
 }
-async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = Date.now(), days = 14, apply = false }) {
+function placeConversation(stored, { key, verdict, picked, root, title }, { now, lookups }) {
+  if (stored.conversations[key] || stored.ignored?.[key]) return { next: null, outcome: { skip: true } };
+  const live = (request) => {
+    const id = request && stored.conversations[request.anchor];
+    const group = id && stored.groups[id];
+    return group ? { groupId: id, anchor: group.anchor, title: group.title } : null;
+  };
+  const target = verdict.band === "join" ? live(picked) : null;
+  if (verdict.band === "join" && !target) return { next: null, outcome: { unplaced: `the picked request ${verdict.requestId} left the ledger while the judge was asked` } };
+  const decisions = target ? { groups: [{ title: target.title, conversations: [target.anchor, key], links: [{ kind: "judge", conversations: [target.anchor, key], evidence: verdict.evidence }], ...typeof root === "string" && root ? { projectRoot: root } : {} }] } : { groups: [{ title, conversations: [key] }] };
+  const next = applyDecisionsWith(stored, decisions, now, lookups);
+  const suggested = verdict.band === "suggest" ? live(picked) : null;
+  if (suggested) next.suggestions = { ...next.suggestions ?? {}, [key]: { requestId: suggested.groupId, confidence: verdict.confidence, evidence: verdict.evidence, judge: verdict.judge, at: iso2(now), status: "open" } };
+  return { next, outcome: { target, suggested, title } };
+}
+function writePlacement(dir, placement, { now, lookups }) {
+  const { next, outcome } = placeConversation(readGroupsFile(dir), placement, { now, lookups });
+  if (next) writeJsonAtomic(join8(dir, "request-groups.json"), next);
+  return outcome;
+}
+async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = Date.now(), days = 14, apply = false, ledger: ledgerWriter = null }) {
   const judges = [rulesJudge, ...judge ? [judge] : []];
   const ledger = readLedger(dir);
   const sinceEpoch = now - days * DAY_MS;
@@ -2722,9 +2744,8 @@ async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = 
   const skip = /* @__PURE__ */ new Set();
   const routed = [], unplaced = [];
   let working = ledger.groups;
-  const persist = () => {
-    if (apply) writeJsonAtomic(join8(dir, "request-groups.json"), working);
-  };
+  const lookups = databaseLookups(database, ledger.agentWrittenPromptIds);
+  const writer = ledgerWriter ?? { place: (placement, { now: at }) => writePlacement(dir, placement, { now: at, lookups }) };
   for (; ; ) {
     const input = groupingInput({ ...ledger, groups: working }, database, { sinceEpoch, limit: Infinity, skip });
     if (!input.conversations.length) break;
@@ -2736,6 +2757,24 @@ async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = 
       anchor: request.anchor,
       context: { title: request.title, ...context(request.anchor, { project: anchors.get(request.anchor)?.project ?? null, startedAt: anchors.get(request.anchor)?.startedAt ?? null }) }
     }));
+    const place = async (key, verdict, conversation) => {
+      const picked = verdict.requestId ? openRequests.find((request) => request.groupId === verdict.requestId) : null;
+      const placement = {
+        key,
+        verdict,
+        root,
+        title: ownTitle(conversation.openingAsk),
+        picked: picked ? { groupId: picked.groupId, anchor: picked.anchor, title: picked.title } : null
+      };
+      if (!apply) {
+        const { next, outcome: outcome2 } = placeConversation(working, placement, { now, lookups });
+        if (next) working = next;
+        return outcome2;
+      }
+      const outcome = await writer.place(placement, { database, now });
+      working = readGroupsFile(dir);
+      return outcome;
+    };
     for (const conversation of input.conversations) {
       const key = conversation.conversationKey;
       const judged = {
@@ -2760,31 +2799,17 @@ async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = 
         skip.add(key);
         continue;
       }
-      if (apply) {
-        working = readLedger(dir).groups;
-        if (working.conversations[key] || working.ignored?.[key]) {
-          skip.add(key);
-          continue;
-        }
-      }
-      const live = (request) => {
-        const id = request && working.conversations[request.anchor];
-        const group = id && working.groups[id];
-        return group ? { ...request, groupId: id, anchor: group.anchor, title: group.title } : null;
-      };
-      const picked = verdict.requestId ? openRequests.find((request) => request.groupId === verdict.requestId) : null;
-      const target = verdict.band === "join" ? live(picked) : null;
-      if (verdict.band === "join" && !target) {
-        unplaced.push({ conversationKey: key, root, openingAsk: conversation.openingAsk, reason: `the picked request ${verdict.requestId} left the ledger while the judge was asked` });
+      const placement = await place(key, verdict, conversation);
+      if (placement.skip) {
         skip.add(key);
         continue;
       }
-      const title = ownTitle(conversation.openingAsk);
-      const decisions = target ? { groups: [{ title: target.title, conversations: [target.anchor, key], links: [{ kind: "judge", conversations: [target.anchor, key], evidence: verdict.evidence }], ...typeof root === "string" && root ? { projectRoot: root } : {} }] } : { groups: [{ title, conversations: [key] }] };
-      working = applyDecisions(working, decisions, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
-      const suggested = verdict.band === "suggest" ? live(picked) : null;
-      if (suggested) working.suggestions = { ...working.suggestions ?? {}, [key]: { requestId: suggested.groupId, confidence: verdict.confidence, evidence: verdict.evidence, judge: verdict.judge, at: iso2(now), status: "open" } };
-      persist();
+      if (placement.unplaced) {
+        unplaced.push({ conversationKey: key, root, openingAsk: conversation.openingAsk, reason: placement.unplaced });
+        skip.add(key);
+        continue;
+      }
+      const { target, suggested, title } = placement;
       if (!target) openRequests = [{ groupId: groupIdFor(key), title, anchor: key, context: { title, ...judged.context } }, ...openRequests];
       routed.push({
         conversationKey: key,
@@ -2805,8 +2830,8 @@ async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = 
 }
 function decideSuggestion({ dir, database, conversationKey: conversationKey2, action, now = Date.now() }) {
   if (!["join", "not-this"].includes(action)) throw new TypeError(`action must be join or not-this, got ${action}.`);
-  const ledger = readLedger(dir);
-  const groups = ledger.groups;
+  const groups = readGroupsFile(dir);
+  const excludedPromptIds = readAgentWrittenPromptIds(dir);
   const suggestion = groups.suggestions?.[conversationKey2];
   if (!suggestion || suggestion.status !== "open") return null;
   const request = groups.groups[suggestion.requestId];
@@ -2822,7 +2847,7 @@ function decideSuggestion({ dir, database, conversationKey: conversationKey2, ac
       conversations: [request.anchor, conversationKey2, ...brought],
       links: [{ kind: "judge", conversations: [request.anchor, conversationKey2], evidence: `Owner joined on the judge's suggestion. ${suggestion.evidence}` }, ...broughtLinks],
       ...typeof request.projectRoot === "string" && request.projectRoot ? { projectRoot: request.projectRoot } : {}
-    }] }, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
+    }] }, { database, now, excludedPromptIds });
     next.suggestions[conversationKey2] = { ...suggestion, status: "joined", resolvedAt: iso2(now) };
     if (ownId && !next.groups[ownId]) for (const [other, entry] of Object.entries(next.suggestions)) {
       if (entry.status === "open" && entry.requestId === ownId) next.suggestions[other] = { ...entry, requestId: suggestion.requestId };
@@ -2830,8 +2855,8 @@ function decideSuggestion({ dir, database, conversationKey: conversationKey2, ac
   } else {
     if (groups.conversations[conversationKey2]) next = structuredClone(groups);
     else {
-      const [candidate] = readCandidates(database, { conversationKeys: [conversationKey2], excludedPromptIds: ledger.agentWrittenPromptIds });
-      next = applyDecisions(groups, { groups: [{ title: ownTitle(candidate?.firstAsk ?? ""), conversations: [conversationKey2] }] }, { database, now, excludedPromptIds: ledger.agentWrittenPromptIds });
+      const [candidate] = readCandidates(database, { conversationKeys: [conversationKey2], excludedPromptIds });
+      next = applyDecisions(groups, { groups: [{ title: ownTitle(candidate?.firstAsk ?? ""), conversations: [conversationKey2] }] }, { database, now, excludedPromptIds });
     }
     next.suggestions = { ...next.suggestions ?? {}, [conversationKey2]: { ...suggestion, status: "declined", resolvedAt: iso2(now), evidence: `Owner declined: not part of "${request?.title ?? suggestion.requestId}". ${suggestion.evidence}` } };
     next.updatedAt = iso2(now);
@@ -2884,10 +2909,11 @@ var init_request_judge = __esm({
 
 // src/services/work-view/request-groups.mjs
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync, renameSync as renameSync2, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash, randomBytes as randomBytes2 } from "node:crypto";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync, renameSync as renameSync2, rmSync, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join9 } from "node:path";
+import { isMainThread } from "node:worker_threads";
 function placeholders(values) {
   return values.map(() => "?").join(",");
 }
@@ -3040,11 +3066,19 @@ function readJson(path3, fallback) {
   }
 }
 function writeJsonAtomic(path3, value) {
+  if (!isMainThread) {
+    throw Object.assign(new Error(`Refused to write ${path3} from a worker thread: the worker's main thread is the ledger's only writer. Send the change to it (ledger-writes.mjs remoteLedgerWriter).`), { code: LEDGER_OFF_MAIN_THREAD_CODE });
+  }
   mkdirSync5(join9(path3, ".."), { recursive: true });
-  const temp = `${path3}.tmp`;
-  writeFileSync3(temp, `${JSON.stringify(value, null, 2)}
+  const temp = `${path3}.${process.pid}-${randomBytes2(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync3(temp, `${JSON.stringify(value, null, 2)}
 `, { mode: 384 });
-  renameSync2(temp, path3);
+    renameSync2(temp, path3);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
 }
 function applyGroupDecisions(stored, decisions, now = Date.now(), { projectOf = /* @__PURE__ */ new Map() } = {}) {
   if (!Array.isArray(decisions?.groups)) throw new TypeError("Decisions need a groups array.");
@@ -3266,8 +3300,21 @@ function validateStory(story) {
     }))
   };
 }
+function readGroupsFile(dir = LEDGER_DIR) {
+  return readJson(join9(dir, "request-groups.json"), emptyGroups());
+}
+function readStoryFile(dir = LEDGER_DIR) {
+  return readJson(join9(dir, "story.json"), null);
+}
+function readAgentWrittenPromptIds(dir = LEDGER_DIR) {
+  return new Set(readJson(join9(dir, AGENT_WRITTEN_PROMPTS_FILE), { promptIds: [] }).promptIds ?? []);
+}
+function readProgressEntry(dir, groups, groupId) {
+  const entry = groups.groups[groupId] ? readJson(join9(dir, "progress", `${groupId}.json`), null) : null;
+  return entry?.groupId ? { ...entry, title: groups.groups[groupId].title } : void 0;
+}
 function readLedger(dir = LEDGER_DIR) {
-  const groups = readJson(join9(dir, "request-groups.json"), emptyGroups());
+  const groups = readGroupsFile(dir);
   const progress = {};
   let names = [];
   try {
@@ -3282,9 +3329,9 @@ function readLedger(dir = LEDGER_DIR) {
   return {
     groups,
     progress,
-    story: readJson(join9(dir, "story.json"), null),
+    story: readStoryFile(dir),
     refresh: readJson(join9(dir, "refresh.json"), null),
-    agentWrittenPromptIds: new Set(readJson(join9(dir, AGENT_WRITTEN_PROMPTS_FILE), { promptIds: [] }).promptIds ?? [])
+    agentWrittenPromptIds: readAgentWrittenPromptIds(dir)
   };
 }
 function groupDetails(groupId, ledger, candidatesByKey) {
@@ -3515,18 +3562,57 @@ function groupingInput(ledger, database, { sinceEpoch, limit = GROUPING_BATCH, s
     remaining: fresh.length - batch.length
   };
 }
-function applyDecisions(stored, decisions, { database, now = Date.now(), excludedPromptIds = null }) {
+function databaseLookups(database, excludedPromptIds = null) {
+  return {
+    projectsOf: (keys) => readConversationProjects(database, keys),
+    anchorAsksOf: (keys) => new Map(readCandidates(database, { conversationKeys: keys, excludedPromptIds }).map((candidate) => [candidate.conversationKey, candidate.original]))
+  };
+}
+function applyDecisionsWith(stored, decisions, now, lookups) {
   const touched = (decisions?.groups ?? []).flatMap((group) => Array.isArray(group?.conversations) ? group.conversations : []).filter(isConversationKey);
   const touchedGroups = new Set(touched.map((key) => groupIdFor(key)));
   const existing = Object.entries(stored?.conversations ?? {}).filter(([, id]) => touchedGroups.has(id)).map(([key]) => key);
-  const next = applyGroupDecisions(stored, decisions, now, { projectOf: readConversationProjects(database, [...touched, ...existing]) });
+  const next = applyGroupDecisions(stored, decisions, now, { projectOf: lookups.projectsOf([...touched, ...existing]) });
   const missing = Object.values(next.groups).filter((group) => !group.anchorAsk).map((group) => group.anchor);
-  const anchors = new Map(readCandidates(database, { conversationKeys: missing, excludedPromptIds }).map((candidate) => [candidate.conversationKey, candidate.original]));
+  const anchors = lookups.anchorAsksOf(missing);
   for (const group of Object.values(next.groups)) if (!group.anchorAsk && anchors.has(group.anchor)) group.anchorAsk = anchors.get(group.anchor);
   return next;
 }
-function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), print: print2 = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId: localDeviceId2, saveFocus: saveFocus2 = null, judge = void 0 } = {}) {
+function applyDecisions(stored, decisions, { database, now = Date.now(), excludedPromptIds = null }) {
+  return applyDecisionsWith(stored, decisions, now, databaseLookups(database, excludedPromptIds));
+}
+function writeDecisions(dir, decisions, { now, lookups }) {
+  const merged = applyDecisionsWith(readGroupsFile(dir), decisions, now, lookups);
+  writeJsonAtomic(join9(dir, "request-groups.json"), merged);
+  return { groups: Object.keys(merged.groups).length, conversations: Object.keys(merged.conversations).length };
+}
+function writeProgress(dir, answer, { now }) {
+  const groups = readGroupsFile(dir);
+  const reviewed = validateProgress(answer, groups.groups);
+  const checkedAt = iso3(now);
+  const previous = readProgressEntry(dir, groups, reviewed.groupId);
+  const unchanged = previous && JSON.stringify(storyFacts(previous)) === JSON.stringify(storyFacts(reviewed));
+  const recorded = { ...reviewed, checkedAt, changedAt: unchanged ? previous.changedAt ?? previous.checkedAt : checkedAt, readings: appendReading(previous, { at: checkedAt, percent: reviewed.percent }) };
+  writeJsonAtomic(join9(dir, "progress", `${recorded.groupId}.json`), recorded);
+  return { recorded: recorded.groupId, state: recorded.state, percent: recorded.percent, readings: recorded.readings.length };
+}
+function writeStory(dir, validated, { now }) {
+  const fromOwnerGoals = (readStoryFile(dir)?.preferences ?? []).filter((preference) => preference?.source === OWNER_GOALS_LIST);
+  const written = { ...validated, preferences: [...validated.preferences, ...fromOwnerGoals], writtenAt: iso3(now) };
+  writeJsonAtomic(join9(dir, "story.json"), written);
+  return { recorded: "story", preferences: written.preferences.length };
+}
+function localLedgerWriter(dir) {
+  return {
+    apply: (decisions, { database, now }) => writeDecisions(dir, decisions, { now, lookups: databaseLookups(database, readAgentWrittenPromptIds(dir)) }),
+    recordProgress: (answer, { now }) => writeProgress(dir, answer, { now }),
+    recordStory: (validated, { now }) => writeStory(dir, validated, { now })
+  };
+}
+function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), print: print2 = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId: localDeviceId2, saveFocus: saveFocus2 = null, judge = void 0, ledger: ledgerWriter = null } = {}) {
   const [command, ...args] = argv;
+  const writer = ledgerWriter ?? localLedgerWriter(dir);
+  const afterWrite = (written, show) => typeof written?.then === "function" ? written.then(show) : show(written);
   const db = () => database ?? openDatabase();
   const since = () => now - option(args, "days", 14) * DAY_MS2;
   if (command === "candidates") {
@@ -3544,13 +3630,11 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
   }
   if (command === "grouping-input") return print2(groupingInput(readLedger(dir), db(), { sinceEpoch: since(), limit: option(args, "limit", GROUPING_BATCH) }));
   if (command === "judge") {
-    return Promise.resolve().then(() => (init_request_judge(), request_judge_exports)).then(({ configuredJudge: configuredJudge2, routeUndecided: routeUndecided2 }) => routeUndecided2({ dir, database: db(), judge: judge === void 0 ? configuredJudge2() : judge, now, days: option(args, "days", 14), apply: args.includes("--apply") })).then(print2);
+    return Promise.resolve().then(() => (init_request_judge(), request_judge_exports)).then(({ configuredJudge: configuredJudge2, routeUndecided: routeUndecided2 }) => routeUndecided2({ dir, database: db(), judge: judge === void 0 ? configuredJudge2() : judge, now, days: option(args, "days", 14), apply: args.includes("--apply"), ledger: ledgerWriter })).then(print2);
   }
   if (command === "apply") {
-    const ledger = readLedger(dir);
-    const next = applyDecisions(ledger.groups, readInput(args[0] ?? "-"), { database: db(), now, excludedPromptIds: ledger.agentWrittenPromptIds });
-    writeJsonAtomic(join9(dir, "request-groups.json"), next);
-    return print2({ groups: Object.keys(next.groups).length, conversations: Object.keys(next.conversations).length });
+    const decisions = readInput(args[0] ?? "-");
+    return afterWrite(writer.apply(decisions, { database: db(), now }), print2);
   }
   if (command === "pending" || command === "show") {
     const ledger = readLedger(dir);
@@ -3580,14 +3664,8 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
     return print2({ due: due.length, groups: due.slice(0, limit).map((group) => ({ groupId: group.groupId, title: group.title, lastActivityAt: group.lastActivityAt, conversations: group.conversations.length })), deferred: Math.max(0, due.length - limit), ungroupedConversations: ungrouped });
   }
   if (command === "record-progress") {
-    const ledger = readLedger(dir);
-    const reviewed = validateProgress(readInput(args[0] ?? "-"), ledger.groups.groups);
-    const checkedAt = iso3(now);
-    const previous = ledger.progress[reviewed.groupId];
-    const unchanged = previous && JSON.stringify(storyFacts(previous)) === JSON.stringify(storyFacts(reviewed));
-    const entry = { ...reviewed, checkedAt, changedAt: unchanged ? previous.changedAt ?? previous.checkedAt : checkedAt, readings: appendReading(ledger.progress[reviewed.groupId], { at: checkedAt, percent: reviewed.percent }) };
-    writeJsonAtomic(join9(dir, "progress", `${entry.groupId}.json`), entry);
-    return print2({ recorded: entry.groupId, state: entry.state, percent: entry.percent, readings: entry.readings.length });
+    const answer = readInput(args[0] ?? "-");
+    return afterWrite(writer.recordProgress(answer, { now }), print2);
   }
   if (command === "story-input") {
     const { groups, progress, story } = readLedger(dir);
@@ -3613,10 +3691,7 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
   }
   if (command === "record-story") {
     const validated = validateStory(readInput(args[0] ?? "-"));
-    const fromOwnerGoals = (readLedger(dir).story?.preferences ?? []).filter((preference) => preference?.source === OWNER_GOALS_LIST);
-    const story = { ...validated, preferences: [...validated.preferences, ...fromOwnerGoals], writtenAt: iso3(now) };
-    writeJsonAtomic(join9(dir, "story.json"), story);
-    return print2({ recorded: "story", preferences: story.preferences.length });
+    return afterWrite(writer.recordStory(validated, { now }), print2);
   }
   const focusQuestion = () => {
     const ledger = readLedger(dir), focus = readFocus(db(), { localDeviceId: requireDeviceId(localDeviceId2) });
@@ -3634,7 +3709,7 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
   if (command === "refresh-needs") return print2(refreshNeeds({ dir, database: db(), now, days: option(args, "days", 14), localDeviceId: localDeviceId2 }));
   throw new TypeError("Usage: request-groups.mjs candidates|grouping-input|judge|apply|pending|show|record-progress|story-input|record-story|focus-input|record-focus|refresh-needs (see file header).");
 }
-var DATA_DIR2, LEDGER_DIR, AGENT_WRITTEN_PROMPTS_FILE, DAY_MS2, GOALS_STALE_MS, MAX_CONVERSATIONS_PER_LINKING_LIST, PROGRESS_STATES, PREFERENCE_KINDS, USAGE_LEVELS, VALUE_LEVELS, LINK_KINDS, MAX_READINGS, iso3, groupIdFor, emptyGroups, isIsoOrNull, evidenceList, STORY_NARRATIVE_MAX, STORY_NARRATIVE_TARGET, STORY_RECAP_BUDGET, STORY_CHAPTER_MIN_BUDGET, STORY_CHARS_PER_WORD, STORY_REFUSAL_PARTS, FOCUS_ASK_CHARS, CONVERSATIONS_PER_QUERY, groupConversations, records, otherPassHash, focusAreaRecord, AREA_NAME_MAX, AREA_SENTENCE_MAX, requireDeviceId, GROUPING_BATCH, FOCUS_BATCH, CLOSED_STATES;
+var DATA_DIR2, LEDGER_DIR, AGENT_WRITTEN_PROMPTS_FILE, DAY_MS2, GOALS_STALE_MS, MAX_CONVERSATIONS_PER_LINKING_LIST, PROGRESS_STATES, PREFERENCE_KINDS, USAGE_LEVELS, VALUE_LEVELS, LINK_KINDS, MAX_READINGS, iso3, groupIdFor, LEDGER_OFF_MAIN_THREAD_CODE, emptyGroups, isIsoOrNull, evidenceList, STORY_NARRATIVE_MAX, STORY_NARRATIVE_TARGET, STORY_RECAP_BUDGET, STORY_CHAPTER_MIN_BUDGET, STORY_CHARS_PER_WORD, STORY_REFUSAL_PARTS, FOCUS_ASK_CHARS, CONVERSATIONS_PER_QUERY, groupConversations, records, otherPassHash, focusAreaRecord, AREA_NAME_MAX, AREA_SENTENCE_MAX, requireDeviceId, GROUPING_BATCH, FOCUS_BATCH, CLOSED_STATES;
 var init_request_groups = __esm({
   "src/services/work-view/request-groups.mjs"() {
     "use strict";
@@ -3656,6 +3731,7 @@ var init_request_groups = __esm({
     MAX_READINGS = 20;
     iso3 = (epoch) => Number.isFinite(epoch) && epoch > 0 ? new Date(epoch).toISOString() : null;
     groupIdFor = (anchorConversationKey) => `g_${createHash("sha256").update(anchorConversationKey).digest("hex").slice(0, 12)}`;
+    LEDGER_OFF_MAIN_THREAD_CODE = "LEDGER_OFF_MAIN_THREAD";
     emptyGroups = () => ({ version: 1, updatedAt: null, conversations: {}, groups: {}, ignored: {} });
     isIsoOrNull = (value) => value === null || typeof value === "string" && Number.isFinite(Date.parse(value));
     evidenceList = (value, limit = 8) => (Array.isArray(value) ? value : typeof value === "string" && value.trim() ? [value] : []).map(String).slice(0, limit);

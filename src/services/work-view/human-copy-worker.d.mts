@@ -7,6 +7,8 @@ export class HumanCopyWorker {
   constructor(options?: { provider?: HumanCopyProvider | null; cachePath?: string | null; concurrency?: number; quietMs?: number; maxWaitMs?: number; minIntervalMs?: number; retryMs?: number; maxRetryMs?: number; now?: () => number; warn?: (message: string) => void });
   load(): Promise<void>;
   start(): void;
+  /** Stops the pump without closing: the cache and queue stay, and start() resumes. */
+  stop(): void;
   close(): void;
   pauseWhile(shouldPause: () => boolean): void;
   observe<T extends { humanRequests?: unknown[] }>(view: T): T;

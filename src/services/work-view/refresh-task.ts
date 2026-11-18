@@ -20,7 +20,8 @@ import { runCommand } from '../agent-runner/detect.js';
 import { writeOwnerPromptsFile, type OwnerPromptsFile } from '../prompt-import/owner-prompts-file.js';
 import { resolvePythonCommand } from './python.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
-import { FOCUS_BATCH, readGoals, readLedger, runCli, validateFocusAnswer, validateGroupingAnswer, type FocusInput, type LedgerDatabase, type RefreshNeeds } from './request-groups.mjs';
+import { FOCUS_BATCH, readGoals, readLedger, validateFocusAnswer, validateGroupingAnswer, type FocusInput, type GroupingInput, type LedgerDatabase, type LedgerWriter, type RefreshNeeds } from './request-groups.mjs';
+import { runRefreshCommand } from './work-view-sources.js';
 import { FOCUS_AUTO_PLACE_THRESHOLD, judgeFocusBatch, placesAlone, type FocusJudge, type FocusJudgement } from './focus-judge.mjs';
 import { isWithdrawnArea, PROPOSAL_KINDS, readFocusAreas, type FocusArea, type RouterFocusBody } from './my-focus.mjs';
 import { NAV_LABELS } from './nav-words.mjs';
@@ -83,6 +84,15 @@ export const FOCUS_ANSWER_SCHEMA: AnswerSchema = strictObject({
 /** When each step ran, for refresh.json's run record (not shown in My Work). */
 export interface StepTiming { step: string; agent: UsableAgentId; startedAt: string; finishedAt: string; groups?: number }
 
+/**
+ * Where the scheduler's ten-minute needs scan runs. The worker passes a read on a thread of its own, so an idle check never
+ * scans the database on the main thread. (The run itself is not here: the whole job runs on its own thread, refresh-job-host.ts.)
+ */
+export interface RefreshScans {
+  /** The needs scan, for the scheduler's ten-minute check. */
+  needs(): Promise<RefreshNeeds>;
+}
+
 export interface RefreshTaskOptions {
   needs: RefreshNeeds;
   reason: string;
@@ -92,6 +102,11 @@ export interface RefreshTaskOptions {
   ledgerDir: string;
   /** The installed plugin folder holding skills/ and .mcp.json. */
   pluginRoot: string;
+  /**
+   * Opens the database for one piece of the run's work: every scan, routing write and judge read of the run goes through it.
+   * The run does heavy synchronous database work, so the worker only ever calls buildRefreshTask on a thread of its own
+   * (refresh-job-host.ts), never on its main thread.
+   */
   openDatabase: () => LedgerDatabase & { close(): void };
   /** Files each new conversation under the request it continues before the grouping agent sees it (Jev on
    * a CMEM Pro or OpenRouter install, request-judge.mjs). Null or absent: code links alone route, and the
@@ -103,6 +118,10 @@ export interface RefreshTaskOptions {
   /** The confidence at which a focus-judge pick is placed without the agent; FOCUS_AUTO_PLACE_THRESHOLD (null: never)
    * unless a test injects one. */
   focusAutoPlaceThreshold?: number | null;
+  /** Writes the request ledger for `apply`, `record-progress`, `record-story` and the routing placements. Absent: this task writes
+   * the files itself, which is right only where nothing else writes them (a test, a tool). The job thread passes the writer that
+   * sends each change to the worker's main thread, the ledger's only writer (ledger-writes.mjs). */
+  ledger?: LedgerWriter | null;
   now?: () => number;
   spawnImpl?: typeof spawn;
   /** This worker's sync device id ('' when cloud sync never started), so my-focus rows replay in the same order the
@@ -223,29 +242,23 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       return path;
     };
     const localDeviceId = options.localDeviceId();
-    const cli = (argv: string[], input?: unknown) => {
-      let output: any;
+    /** One CLI command, on a database of its own. */
+    const cli = async (argv: string[], input?: unknown): Promise<any> => {
+      const full = input === undefined ? argv : [...argv, writeInput(argv[0], input)];
       const database = openDatabase();
-      try { runCli(input === undefined ? argv : [...argv, writeInput(argv[0], input)], { dir: ledgerDir, database, now: now(), print: value => { output = value; }, localDeviceId }); }
+      try { return await runRefreshCommand(database, { ledgerDir, argv: full, now: now(), localDeviceId, ledger: options.ledger }); }
       finally { database.close(); }
-      return output;
     };
     /** record-focus: checked against the database, then written by the worker. The worker checks the whole answer before
      * its first write, so its refusal (a TypeError) is re-asked; any other failure is not, since a retry would not help. */
     const recordFocus = async (flags: string[], answer: unknown) => {
       if (!options.saveFocus) throw Object.assign(new Error('The focus step has no way to save: the worker did not pass its my-focus write.'), { retryable: false });
-      let output: any;
-      const database = openDatabase();
-      try {
-        await runCli(['record-focus', ...flags, writeInput('record-focus', answer)], {
-          dir: ledgerDir, database, now: now(), print: value => { output = value; }, localDeviceId,
-          saveFocus: async body => {
-            try { return await options.saveFocus!(body); }
-            catch (error) { throw error instanceof TypeError ? error : Object.assign(error instanceof Error ? error : new Error(String(error)), { retryable: false }); }
-          },
-        });
-      } finally { database.close(); }
-      return output as { placed: number; proposed: number };
+      // The check reads the database; the write is the worker's main thread's, reached through saveFocus.
+      const body = await cli(['record-focus', ...flags], answer) as RouterFocusBody;
+      let saved: { placed: number; focusAreaIds: string[] };
+      try { saved = await options.saveFocus(body); }
+      catch (error) { throw error instanceof TypeError ? error : Object.assign(error instanceof Error ? error : new Error(String(error)), { retryable: false }); }
+      return { placed: saved.placed, proposed: saved.focusAreaIds.length };
     };
     let python: ReturnType<typeof resolvePythonCommand> | undefined;
     /** Resolve once per refresh, and never retry the script with another interpreter. The goals step re-asks the model
@@ -352,7 +365,9 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       const judgeStartedAt = new Date(now()).toISOString();
       const judgeDatabase = openDatabase();
       let routing: Awaited<ReturnType<typeof routeUndecided>>;
-      try { routing = await routeUndecided({ dir: ledgerDir, database: judgeDatabase, judge: options.judge ?? null, now: now(), days: 14, apply: true }); }
+      try {
+        routing = await routeUndecided({ dir: ledgerDir, database: judgeDatabase, judge: options.judge ?? null, now: now(), days: 14, apply: true, ledger: options.ledger });
+      }
       finally { judgeDatabase.close(); }
       if (routing.routed.length || routing.unplaced.length) steps.push({ step: 'judge', agent, startedAt: judgeStartedAt, finishedAt: new Date(now()).toISOString(), groups: routing.routed.length });
       if (routing.routed.length) done.push(`${routing.routed.length} new conversations judged (${routing.counts.joined} joined, ${routing.counts.suggested} suggested, ${routing.counts.new} new)`);
@@ -360,7 +375,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       // that root's open requests. Every batch is saved before the next is read, so a later batch
       // sees the requests an earlier one started.
       let grouped = 0;
-      for (let input = cli(['grouping-input', '--days', '14']); input.conversations.length; input = cli(['grouping-input', '--days', '14'])) {
+      for (let input = await cli(['grouping-input', '--days', '14']); input.conversations.length; input = await cli(['grouping-input', '--days', '14'])) {
         await step('grouping', [
           requestProgress, '---', readOnly,
           // The batch is inline, with its keys named: on a file path alone Codex's light model sometimes
@@ -372,11 +387,13 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       }
       if (grouped) done.push(`${grouped} new conversations grouped`);
 
-      const due: Array<{ groupId: string }> = cli(['pending', '--days', '14', '--limit', '1000000']).groups;
+      const due: Array<{ groupId: string }> = (await cli(['pending', '--days', '14', '--limit', '1000000'])).groups;
       let reviewed = 0;
       /** One batch of reviews. Like step(), but a refusal re-asks only for the groups that were refused. */
       const reviewBatch = async (groups: Array<{ groupId: string }>) => {
-        let shows = groups.map(group => cli(['show', group.groupId]));
+        // One at a time: each show opens a connection of its own.
+        let shows: Array<{ groupId: string }> = [];
+        for (const group of groups) shows.push(await cli(['show', group.groupId]));
         let refusals: string[] = [];
         let rejectedReviews: Array<{ groupId?: string }> = [];
         for (let attempt = 0; attempt < 2 && shows.length; attempt++) {
@@ -392,7 +409,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
           rejectedReviews = [];
           const recorded = new Set<string>();
           for (const review of reviews) {
-            try { cli(['record-progress'], review); recorded.add(String(review.groupId)); reviewed++; }
+            try { await cli(['record-progress'], review); recorded.add(String(review.groupId)); reviewed++; }
             catch (error) { rejectedReviews.push(review); refusals.push(`${review.groupId}: ${error instanceof Error ? error.message : String(error)}`); }
           }
           shows = shows.filter(show => !recorded.has(show.groupId));
@@ -433,7 +450,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
         // The focus judge (Jev) asks once per request per run: a request it judged stays judged when a later batch lists it again.
         const focusJudge = options.focusJudge ?? null, threshold = options.focusAutoPlaceThreshold === undefined ? FOCUS_AUTO_PLACE_THRESHOLD : options.focusAutoPlaceThreshold;
         const judged = new Map<string, FocusJudgement>(), placedAlone = new Set<string>();
-        for (let input: FocusInput = cli(['focus-input', '--limit', String(FOCUS_BATCH)]); input.requests.length; input = cli(['focus-input', '--limit', String(FOCUS_BATCH)])) {
+        for (let input: FocusInput = await cli(['focus-input', '--limit', String(FOCUS_BATCH)]); input.requests.length; input = await cli(['focus-input', '--limit', String(FOCUS_BATCH)])) {
           if (focusJudge) {
             const fresh = input.requests.filter(request => !judged.has(request.anchor));
             if (fresh.length) await timed('focus-judge', async () => {
@@ -476,7 +493,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
           const none = results.filter(result => result.focusAreaId === 'other').length, unjudged = results.length - picked - none;
           done.push(`${results.length} requests judged for focus (${picked} picked an area, ${none} none, ${unjudged} unjudged${placedAlone.size ? `, ${placedAlone.size} placed without the agent` : ''})`);
         }
-        const other = cli(['focus-input', '--other']);
+        const other = await cli(['focus-input', '--other']);
         if (other.due) {
           const saved = await step('focus', sorting(
             `Do only section 3, step 3 (propose focus areas from Other) for the \`focus-input --other\` output (also saved in ${writeInput('focus-input-other', other)}):\n\n\`\`\`json\n${JSON.stringify(other, null, 2)}\n\`\`\`\n\nPlace nothing ("placements": []). Reply with only the JSON that \`record-focus --other\` takes ({"placements": [], "proposals": [...]}), proposing nothing when nothing qualifies.`,
@@ -487,7 +504,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       } catch (error) { focusError = error; }
 
       // Only reviews whose facts (state, percent, dates, milestones, preferences, outcome) moved since the last story; none means the story still holds.
-      const storyInput = cli(['story-input']);
+      const storyInput = await cli(['story-input']);
       if (storyInput.reviews.length) {
         await step('story', [
           requestProgress, '---', readOnly,
@@ -505,6 +522,15 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
   return {
     reason,
     steps,
+    ...refreshTaskStatics(pluginRoot, ledgerDir),
+    run,
+    prepare: needs.goalsStale ? prepareGoals : undefined,
+  };
+}
+
+/** What a refresh task tells the agent runner before it runs anything: where the agent works and what it may read. */
+export function refreshTaskStatics(pluginRoot: string, ledgerDir: string): Pick<AgentTask, 'cwd' | 'claudeCode'> {
+  return {
     // The work-view folder holds every input file; the data dir above it holds .env and settings.json.
     cwd: ledgerDir,
     claudeCode: {
@@ -515,7 +541,5 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       // Prompts carry untrusted conversation text, so file reads are held to the input files' folder.
       readableFolders: [ledgerDir],
     },
-    run,
-    prepare: needs.goalsStale ? prepareGoals : undefined,
   };
 }

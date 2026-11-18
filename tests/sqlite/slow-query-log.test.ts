@@ -18,6 +18,26 @@ function queuedClock(durations: number[]): () => number {
   };
 }
 
+/**
+ * Whether this Bun sends a transaction's BEGIN and COMMIT through the instance's `run` or `exec`, where the log can see them.
+ * Bun 1.4.x issues them natively, so no patched method is ever called for them and no logger of this shape can time them.
+ */
+function runtimeRoutesTransactionControlThroughPatchableMethods(): boolean {
+  const probe = new Database(':memory:');
+  try {
+    probe.run('CREATE TABLE probe (id INTEGER)');
+    const seen: string[] = [];
+    for (const method of ['run', 'exec'] as const) {
+      const original = probe[method].bind(probe) as (...args: unknown[]) => unknown;
+      (probe as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => { seen.push(String(args[0])); return original(...args); };
+    }
+    probe.transaction(() => { probe.run('INSERT INTO probe VALUES (1)'); }).immediate();
+    return seen.some(sql => /^BEGIN/i.test(sql));
+  } finally {
+    probe.close();
+  }
+}
+
 describe('slow statement log', () => {
   let db: Database;
   let warnings: Array<{ message: string; context: SlowQueryContext }>;
@@ -165,7 +185,7 @@ describe('slow statement log', () => {
     expect(warnings.map(w => w.context.op)).toEqual(['query', 'query', 'get']);
   });
 
-  it('names the application frame, not a bun:sqlite frame, for transaction statements', () => {
+  it.skipIf(!runtimeRoutesTransactionControlThroughPatchableMethods())('names the application frame, not a bun:sqlite frame, for transaction statements', () => {
     let reads = 0;
     instrumentSlowQueries(db, {
       thresholdMs: 500,

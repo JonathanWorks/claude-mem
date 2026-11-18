@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger.js';
-import { describeOpenScopes, openStatementWindow, threadName, type SlowRequestContext } from './sql-scope.js';
-import type { Unrefable } from './stack-source-map.js';
+import { describeOpenScopes, formatTopSql, openStatementWindow, threadName, type SlowRequestContext } from './sql-scope.js';
+import type { Unrefable } from './timer-handle.js';
 import { resolveThresholdMsFromEnv } from './threshold-env.js';
 
 /**
@@ -49,8 +49,23 @@ export interface EventLoopLagMonitor {
 
 let active: EventLoopLagMonitor | undefined;
 
+function describeSide(label: string, report: SlowRequestContext | null): string {
+  return report ? ` | ${label}=${formatTopSql(report.top)}` : '';
+}
+
+/**
+ * The line names every statement that ran in the stall window: SQL text, scope and caller go into the
+ * message, and the context holds scalars only, because the logger prints a nested object as `{N keys: ...}`.
+ */
 function defaultWarn(message: string, context: EventLoopLagContext): void {
-  logger.warn('SYSTEM', message, { ...context });
+  const { lastSqlScope, scoped, unscoped, ...scalars } = context;
+  const detail = `${describeSide('lastSqlScopeTop', lastSqlScope)}${describeSide('scopedTop', scoped)}${describeSide('unscopedTop', unscoped)}`;
+  logger.warn('SYSTEM', `${message}${detail}`, {
+    ...scalars,
+    lastSqlScope: lastSqlScope?.scope ?? 'none',
+    scopedStatements: scoped?.statements ?? 0,
+    unscopedStatements: unscoped?.statements ?? 0,
+  });
 }
 
 /**

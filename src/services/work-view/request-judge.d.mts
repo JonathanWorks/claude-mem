@@ -1,4 +1,4 @@
-import type { LedgerDatabase } from './request-groups.mjs';
+import type { LedgerDatabase, LedgerPlacement, LedgerWriter, MergeLookups, PlacementOutcome } from './request-groups.mjs';
 
 export const JOIN_THRESHOLD: number;
 export const SUGGEST_THRESHOLD: number;
@@ -46,5 +46,9 @@ export interface RoutingPlan {
   routed: RoutedConversation[];
   unplaced: Array<{ conversationKey: string; root: string | null; openingAsk: string | null; reason: string }>;
 }
-export function routeUndecided(options: { dir?: string; database: LedgerDatabase; judge?: RequestJudge | null; now?: number; days?: number; apply?: boolean }): Promise<RoutingPlan>;
+export function routeUndecided(options: { dir?: string; database: LedgerDatabase; judge?: RequestJudge | null; now?: number; days?: number; apply?: boolean; ledger?: Pick<LedgerWriter, 'place'> | null }): Promise<RoutingPlan>;
+/** One conversation's placement in `stored` (pure): the ledger to write (null when nothing changes) and what happened. */
+export function placeConversation(stored: Record<string, any>, placement: LedgerPlacement, options: { now: number; lookups: MergeLookups }): { next: Record<string, any> | null; outcome: PlacementOutcome };
+/** placeConversation against the ledger file as it is now, written when it changes it. */
+export function writePlacement(dir: string, placement: LedgerPlacement, options: { now: number; lookups: MergeLookups }): PlacementOutcome;
 export function decideSuggestion(options: { dir: string; database: LedgerDatabase; conversationKey: string; action: 'join' | 'not-this'; now?: number }): { status: 'joined' | 'declined'; requestId: string | null } | null;

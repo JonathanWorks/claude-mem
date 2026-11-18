@@ -63,6 +63,8 @@ const EXCLUDED_PATTERNS = [
   /servers\/corpus-worker-stream\.ts$/,  // MCP SSE transport; every failure throws to callWorker in mcp-server.ts, which logs it
   /servers\/worker-restart\.ts$/,  // MCP refused-connection retry; the restart is logged by ensureWorkerConnection and failures by callWorker in mcp-server.ts
   /servers\/request-context\.ts$/,  // AsyncLocalStorage holder for the per-call project directory: no I/O and no failure path to log; mcp-http.ts logs the sessions
+  /sqlite\/timer-handle\.ts$/,  // One type-only interface (a timer handle that may be unref'd); no runtime code
+  /worker\/boot-sequence\.ts$/,  // Pure boot-order function over injected steps; a failed step rejects to worker-service.ts, which logs it and exits
   /worker\/http\/origin-policy\.ts$/,  // Pure Origin predicates moved out of middleware.ts; the guards that refuse a request (middleware.ts, mcp-http.ts) log it
 ];
 

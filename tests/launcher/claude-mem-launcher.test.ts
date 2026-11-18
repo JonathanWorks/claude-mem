@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -396,12 +396,19 @@ describe('claude-mem launcher', () => {
       const temporaryHome = makeTemporaryHome();
       const environmentRoot = makeStubPluginRoot(path.join(temporaryHome, 'env-root'));
       const compiledLauncherPath = path.join(temporaryHome, 'claude-mem');
+      // bun leaves a `.<hash>-00000000.bun-build` scratch file in a compile's working directory. Compiling from a scratch
+      // directory with absolute entries keeps it out of the repository, so a test run never changes the tree it tests.
+      const repositoryBuildScratch = () => readdirSync(projectRoot).filter((name) => name.endsWith('.bun-build'));
+      const scratchBefore = repositoryBuildScratch();
+      const compileDirectory = path.join(temporaryHome, 'compile-cwd');
+      mkdirSync(compileDirectory);
       const compileResult = spawnSync(
         process.execPath,
         ['build', '--compile', '--no-compile-autoload-dotenv', launcherBundlePath, '--outfile', compiledLauncherPath],
-        { encoding: 'utf-8', timeout: 120_000 },
+        { cwd: compileDirectory, encoding: 'utf-8', timeout: 120_000 },
       );
       expect(compileResult.status).toBe(0);
+      expect(repositoryBuildScratch()).toEqual(scratchBefore);
 
       const noBunPath = '/usr/bin:/bin';
       expect(spawnSync('which', ['bun'], { env: { PATH: noBunPath }, encoding: 'utf-8' }).status).not.toBe(0);

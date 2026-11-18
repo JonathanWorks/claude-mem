@@ -457,4 +457,36 @@ describe('statement window and open scopes', () => {
     expect(describeOpenScopes()).toEqual({ openScopes: 1, lastSqlScope: null });
     scope.end();
   });
+
+  describe('open scopes are held weakly', () => {
+    /** Starts a scope in its own frame and keeps no reference to it, as a caller that never ends it would. */
+    function startAndForget(): void {
+      startSqlScope('never-ends', quiet).run(() => recordSqlBusy('SELECT forgotten', 1));
+    }
+
+    async function collectUntil(done: () => boolean): Promise<void> {
+      for (let attempt = 0; attempt < 20 && !done(); attempt++) {
+        Bun.gc(true);
+        await new Promise<void>(resolve => setTimeout(resolve, 10));
+      }
+    }
+
+    it('lets a scope that never ends and that nothing references be collected', async () => {
+      const before = describeOpenScopes().openScopes;
+      startAndForget();
+      expect(describeOpenScopes().openScopes).toBe(before + 1);
+      await collectUntil(() => describeOpenScopes().openScopes === before);
+      expect(describeOpenScopes().openScopes).toBe(before);
+    });
+
+    it('still counts a live scope that is open, and removes it when it ends', async () => {
+      const before = describeOpenScopes().openScopes;
+      const live = startSqlScope('live', quiet);
+      Bun.gc(true);
+      await new Promise<void>(resolve => setTimeout(resolve, 10));
+      expect(describeOpenScopes().openScopes).toBe(before + 1);
+      live.end();
+      expect(describeOpenScopes().openScopes).toBe(before);
+    });
+  });
 });

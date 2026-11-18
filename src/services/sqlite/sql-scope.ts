@@ -82,8 +82,24 @@ interface ScopeState {
 
 const storage = new AsyncLocalStorage<ScopeState>();
 
+/**
+ * The top statements as one bounded line: SQL text, how often it ran, the time it took, and the scope and
+ * caller when known. The logger collapses a nested object to `{N keys: ...}`, so a log line carries this text.
+ */
+export function formatTopSql(top: SlowRequestContext['top']): string {
+  if (top.length === 0) return '[]';
+  const entries = top.map(entry => {
+    const detail = [`x${entry.count}`, `${entry.ms}ms`];
+    if (entry.scope) detail.push(`scope=${entry.scope}`);
+    if (entry.caller) detail.push(`caller=${entry.caller}`);
+    return `${entry.sql} (${detail.join(', ')})`;
+  });
+  return `[${entries.join(' ; ')}]`;
+}
+
 function defaultWarn(message: string, context: SlowRequestContext): void {
-  logger.warn('DB', message, { ...context });
+  const { top, ...scalars } = context;
+  logger.warn('DB', `${message} | top=${formatTopSql(top)}`, scalars);
 }
 
 function createState(name: string, parent: ScopeState | undefined, options: SqlScopeOptions): ScopeState {
@@ -259,8 +275,12 @@ export function openStatementWindow(thresholdMs: number): StatementWindow {
   };
 }
 
-/** Scopes that have started and not ended; an end removes the scope, so a scope that never ends stays listed. */
-const openScopes = new Set<ScopeState>();
+/**
+ * Scopes that have started and not ended; an end removes the scope. The set holds weak references: a scope that
+ * never ends and that nothing references any more (its caller dropped it and no async context carries it) is
+ * collected instead of living for the life of the process, and describeOpenScopes prunes its dead entry.
+ */
+const openScopes = new Set<WeakRef<ScopeState>>();
 let statementSeq = 0;
 /** Sequence number of the latest statement that ran outside any open scope. */
 let lastUnscopedSeq = 0;
@@ -283,11 +303,18 @@ export interface OpenScopesReport {
  */
 export function describeOpenScopes(): OpenScopesReport {
   let latest: ScopeState | undefined;
-  for (const state of openScopes) {
+  let live = 0;
+  for (const ref of openScopes) {
+    const state = ref.deref();
+    if (!state) {
+      openScopes.delete(ref);
+      continue;
+    }
+    live++;
     if (state.lastSeq > 0 && (!latest || state.lastSeq >= latest.lastSeq)) latest = state;
   }
   return {
-    openScopes: openScopes.size,
+    openScopes: live,
     lastSqlScope: latest && latest.lastSeq > lastUnscopedSeq ? summarize(latest, latest.name, latest.now() - latest.startedAt) : null,
   };
 }
@@ -341,13 +368,14 @@ export interface SqlScope {
 /** Begin a scope that nests under the active one. `end` is idempotent and logs when the total is slow. */
 export function startSqlScope(name: string, options: SqlScopeOptions = {}): SqlScope {
   const state = createState(name, storage.getStore(), options);
-  openScopes.add(state);
+  const ref = new WeakRef(state);
+  openScopes.add(ref);
   return {
     run: <T>(fn: () => T): T => storage.run(state, fn),
     end: (finalName?: string): SlowRequestContext | null => {
       if (state.closed) return null;
       state.closed = true;
-      openScopes.delete(state);
+      openScopes.delete(ref);
       return warnIfSlow(state, finalName ?? state.name, state.now() - state.startedAt);
     },
   };

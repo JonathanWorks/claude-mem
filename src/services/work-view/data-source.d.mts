@@ -15,8 +15,14 @@ export interface WorkViewSnapshot extends Record<string, unknown> {
 }
 export class WorkStateSource {
   localDeviceId: string;
-  constructor(options?: { databasePath?: string; currentProject?: string; parentProject?: string; titleCachePath?: string | null; ledgerDir?: string | null; pollIntervalMs?: number; localDeviceId?: string });
+  constructor(options?: { databasePath?: string; currentProject?: string; parentProject?: string; titleCachePath?: string | null; ledgerDir?: string | null; pollIntervalMs?: number; localDeviceId?: string;
+    /** Recorded activity alone rebuilds the view at most this often (or every 2x the last build); default 0 rebuilds on every change. */
+    activityRefreshMs?: number; now?: () => number });
   read(): { agentView: WorkViewSnapshot; [key: string]: unknown };
+  /** The saved rules without the activity scan; `connected: false` (and no rules) when the database cannot be read. */
+  readRules(): { connected: boolean; rules: unknown[] };
+  /** The view as of the last read, without reading: the empty view for a source that never read. */
+  snapshot(): { agentView: WorkViewSnapshot; [key: string]: unknown };
   evidence(kind: string, id: number): Record<string, unknown> | null;
   file(kind: string, id: number, index: number): string | null;
   /** The bucket copy a deliverables row names, while it exists: its path, title and kind; null otherwise. */
