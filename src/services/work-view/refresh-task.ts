@@ -32,8 +32,8 @@ import { routeUndecided, type RequestJudge } from './request-judge.mjs';
 export const MEMORY_TOOLS = ['search', 'dumb_search', 'timeline', 'get_observations', 'get_tool_uses', 'work_state_read'];
 const PLUGIN_MCP_PREFIX = 'mcp__plugin_claude-mem_mcp-search__';
 const REVIEW_BATCH = 8;
-/** save_goals.py's FAILED_AFTER_WRITING_EXIT: it failed after its first write, so the goals step must not ask again. */
-const SAVE_GOALS_FAILED_AFTER_WRITING_EXIT = 3;
+/** save_goals.py's MAY_HAVE_APPLIED_EXIT: the worker never answered the save, so it may have applied it; the goals step must not ask the model again. */
+const SAVE_GOALS_MAY_HAVE_APPLIED_EXIT = 3;
 /**
  * Review batches running at the same time. Each batch is one agent process, so this follows the
  * owner's cap on concurrent agent subprocesses, CLAUDE_MEM_MAX_CONCURRENT_AGENTS (default 2), rather
@@ -262,8 +262,8 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
     };
     let python: ReturnType<typeof resolvePythonCommand> | undefined;
     /** Resolve once per refresh, and never retry the script with another interpreter. The goals step re-asks the model
-     * after a refusal, which save_goals.py gives before it writes anything (exit 1); a failure after it started writing
-     * (FAILED_AFTER_WRITING_EXIT) is never retried, since a second answer would suggest its new areas again. */
+     * after a refusal, which save_goals.py gives with nothing written (exit 1); a save the worker never answered
+     * (MAY_HAVE_APPLIED_EXIT) is never retried with a new answer, since a second answer would suggest its new areas again. */
     const runScript = async (args: string[]) => {
       const spawnImpl = options.spawnImpl ?? spawn;
       const interpreter = await (python ??= resolvePythonCommand(spawnImpl));
@@ -271,7 +271,7 @@ export function buildRefreshTask(options: RefreshTaskOptions): AgentTask & { ste
       if (result.spawnError) throw result.spawnError;
       if (result.exitCode !== 0) {
         throw Object.assign(new Error(`${args[0].split('/').pop()} exited ${result.exitCode}: ${`${result.stdout}\n${result.stderr}`.trim().slice(-800)}`),
-          { retryable: result.exitCode !== SAVE_GOALS_FAILED_AFTER_WRITING_EXIT });
+          { retryable: result.exitCode !== SAVE_GOALS_MAY_HAVE_APPLIED_EXIT });
       }
       return result.stdout;
     };

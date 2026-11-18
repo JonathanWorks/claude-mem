@@ -593,6 +593,13 @@ export class WorkerService implements WorkerRef {
         this.dbManager.getSessionStore().appendWorkStateEntry(entry);
         this.dbManager.getCloudSync()?.notify();
       },
+      // The owner-goals save writes its focus areas, rows and rules as one transaction.
+      appendWorkStateEntriesAtomically: (entries, beforeCommit) => {
+        this.dbManager.getSessionStore().appendWorkStateEntriesAtomically(entries, beforeCommit);
+        // The rows are committed: a failed nudge must not make the route answer that nothing was written.
+        try { this.dbManager.getCloudSync()?.notify(); }
+        catch (error) { logger.warn('CLOUD_SYNC', 'Cloud sync nudge failed after an atomic work-state save', {}, error instanceof Error ? error : new Error(String(error))); }
+      },
       // The install funnel's Scan step stores typed prompts read from every agent's transcripts.
       // Hook rows an agent wrote are kept out of goals, work and rules extraction.
       setupScan: new SetupScan({

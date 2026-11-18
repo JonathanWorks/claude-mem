@@ -9,6 +9,7 @@ import { applyLedgerWrite, remoteLedgerWriter, type LedgerWriteOp } from '../../
 import { remoteRefreshTask } from '../../src/services/work-view/refresh-job-client.js';
 import { factLookups, groupIdFor, LEDGER_FACTS_NEEDED_CODE, LEDGER_OFF_MAIN_THREAD_CODE, readLedger, runCli, writeJsonAtomic } from '../../src/services/work-view/request-groups.mjs';
 import { decideSuggestion, routeUndecided } from '../../src/services/work-view/request-judge.mjs';
+import { deadPort } from '../helpers/dead-port.js';
 import { everyRequestInOther, focusWriter } from '../helpers/fake-focus-writer.js';
 import { watchMainThreadStatements } from '../helpers/main-thread-sql-witness.js';
 
@@ -320,7 +321,7 @@ describe('a ledger file is written by the main thread alone', () => {
   });
 });
 
-describe('the request-progress skill\'s bundled script is a writer of its own, with no lock', () => {
+describe('the request-progress skill\'s bundled script, run --offline, is a writer of its own, with no lock', () => {
   const BUNDLE = join(import.meta.dir, '..', '..', 'plugin', 'skills', 'request-progress', 'scripts', 'request-groups.mjs');
 
   it('record-story writes story.json whole, keeps the rules owner-goals saved, and leaves no lock or temp file', async () => {
@@ -332,7 +333,10 @@ describe('the request-progress skill\'s bundled script is a writer of its own, w
       writeFileSync(join(ledger, 'story.json'), JSON.stringify({ narrative: 'Old.', preferences: [ownerRule] }));
       const input = join(data, 'story-answer.json');
       writeFileSync(input, JSON.stringify({ narrative: 'One request under way.' }));
-      const child = Bun.spawn([process.execPath, BUNDLE, 'record-story', input], { stdout: 'pipe', stderr: 'pipe', env: { ...process.env, CLAUDE_MEM_DATA_DIR: data } });
+      // --offline: no worker runs for this script, so it writes the files itself (without the flag it sends the change to the worker, and
+      // refuses when none answers: ledger-cli-via-worker.test.ts). The worker address is pinned to a dead port, never the computer's worker.
+      const env = { ...process.env, CLAUDE_MEM_DATA_DIR: data, CLAUDE_MEM_WORKER_HOST: '127.0.0.1', CLAUDE_MEM_WORKER_PORT: String(await deadPort()) };
+      const child = Bun.spawn([process.execPath, BUNDLE, 'record-story', '--offline', input], { stdout: 'pipe', stderr: 'pipe', env });
       // EXECUTION: the script ran to the end and printed its answer.
       expect(await child.exited).toBe(0);
       expect(JSON.parse(await new Response(child.stdout).text())).toEqual({ recorded: 'story', preferences: 1 });

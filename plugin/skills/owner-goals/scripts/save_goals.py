@@ -19,15 +19,29 @@ A quote dated before the first prompt in owner-prompts.md has aged out of the wi
 carries older quotes forward): it is dropped, and so is an item left with no quote. With no prompts in the file,
 every quote has aged out. When every item ages out, the snapshot is saved empty, which clears the old goals.
 
-Where each kind goes, all through the local worker:
+The save is ONE call to the local worker (POST /api/work-view/owner-goals/save). This script sends the goals it parsed, with the quotes
+it checked; the worker builds every row itself, so nothing is sized or checked against a stand-in, validates each part with the schema of
+its own write route, and writes all of it or none of it, in one SQLite transaction with story.json written last, inside it. Where each
+kind goes:
   focus areas  "owner-goals" rows (task "Focus area: <title>", goal_kind focus-area), and, for an area that
-               matches no saved one, a suggested area in My Focus (POST /api/work-view/focus/owner-goals, which
-               writes only system suggestions under new ids; "matches" is the model's judgment, never a name match)
+               matches no saved one, a suggested area in My Focus (system suggestions under new ids; "matches" is the model's
+               judgment, never a name match)
   asks         "owner-goals" rows (task "Ask: <title>", goal_kind ask), with focus_area and focus_area_id
-  rules        suggestions in My Rules: the build story's preferences (<ledger dir>/story.json), source owner-goals,
-               replacing the ones an earlier save wrote
+  rules        suggestions in My Rules: the build story's preferences in the worker's ledger folder (story.json there), source
+               owner-goals, replacing the ones an earlier save wrote. The worker writes the file; its folder is the worker's, never worked out
+               here. --ledger-dir only asserts a folder, and the worker refuses a different one.
+This script keeps only the checks of the goals JSON's own shape and of the quotes, which need the prompts file. Every other check is the
+worker's, and a save has exactly two outcomes:
+  applied      exit 0: everything was saved.
+  not applied  exit 1: every problem is listed and NOTHING was written; fix the cause and run it again.
+and one that is not known: a request the worker never answered (a timeout, a lost connection) may or may not have been applied (exit 3). The
+save is idempotent by its content, so running the same command again is safe: a save the worker already applied is recognized (the
+worker remembers its last saves, so even after a newer save) and changes nothing, in a real run and in a dry run; the key does not depend
+on how --map is spelled. generated_at is recorded data and decides nothing: a different save is a new save and is applied. Exit 3 is also an
+answer where the rows were rolled back but the rules file could not be put back as it was: it holds the new rules, whole, and the rerun
+replaces the same rules. Do not ask the model for a new answer first, as a new answer would suggest its new focus areas a second time.
 The "owner-goals" list is written under the home folder's project key so there is one list per computer:
-  list state:  human_summary, generated_at, window_days, source_prompt_count, map_path, status
+  list state:  human_summary, generated_at, window_days, source_prompt_count, map_path, status, save_key
   one task per item: status todo, goal_kind, rank, title, goal or focus_area, focus_area_id, latest_at,
                      times_asked, evidence ("YYYY-MM-DD HH:MM | quote" per line)
 Items from the previous snapshot that are not in this one are marked dropped, so a re-run replaces it.
@@ -39,70 +53,139 @@ A past month suggests no focus areas and no rules: those describe the owner now.
 
 --print-focus-areas prints the saved focus areas (id, name, goal, status) for the map step to match against.
 
+--dry-run sends the same request with dryRun set: the worker plans and checks the save, writes nothing and answers what it would write.
+With no worker running, it prints the request and says the worker's check was skipped.
+
 Usage: python3 save_goals.py --goals owner-goals.json --prompts owner-prompts.md [--map owner-map.md]
                              [--start YYYY-MM-DD --end YYYY-MM-DD] [--carried-before "YYYY-MM-DD HH:MM"]
                              [--ledger-dir <dir>] [--dry-run]
        python3 save_goals.py --print-focus-areas
 """
-import argparse, datetime, json, os, re, sys, traceback, urllib.error, urllib.request
+import argparse, datetime, http.client, json, math, os, re, sys, traceback, urllib.error, urllib.request
 
-LIST_NAME = "owner-goals"
-MAX_FIELDS_JSON_CHARS = 2000  # MAX_WORK_STATE_FIELDS_JSON_CHARS in WorkStateRoutes.ts
-MAX_QUOTE_CHARS = 240
-# The bounds POST /api/work-view/focus/owner-goals takes for an area: a nav label and one sentence.
-MAX_AREA_NAME_CHARS = 80
-MAX_AREA_GOAL_CHARS = 300
-# validateStory's bound on one preference (request-groups.mjs), so a rule reads the same after a story rewrite.
-MAX_RULE_CHARS = 200
-# The bound My Work shows an item's title within (compactText(title, 240) in agent-view.mjs).
-MAX_TITLE_CHARS = 240
-# The route's bound on an area's evidence line (ownerGoalsFocusBody in WorkViewRoutes.ts).
-MAX_AREA_EVIDENCE_CHARS = 300
-# The longest focus area id the worker takes (focusAreaIdField in WorkViewRoutes.ts): every row is checked with an id
-# this long before anything is written, so a row that fits then fits with the real id.
-LONGEST_FOCUS_AREA_ID = "fa_" + "0" * 77
-# Exit code for a failure after the first write: the refresh never re-asks the model then, since a second answer
-# would suggest its new areas again. Every refusal before a write exits 1 and can be fixed and retried.
-FAILED_AFTER_WRITING_EXIT = 3
+SAVE_PATH = "/api/work-view/owner-goals/save"
+# Exit code for a save the worker never answered: it may or may not have been applied. The refresh never re-asks the model then, since a
+# second answer would suggest its new areas again; the same command can be run again, as the worker recognizes a save it already applied.
+# Every refusal exits 1: nothing was written, and the cause can be fixed and the command run again.
+MAY_HAVE_APPLIED_EXIT = 3
+# Exit 3 is also the worker's own answer when it rolled the rows back but could not put the rules file back as it was ("ambiguous").
 KIND_LABELS = {"focus-area": "Focus area", "ask": "Ask"}
 ITEM_KEYS = ("focus_areas", "asks", "rules")
-RULE_SOURCE = "owner-goals"
+DEFAULT_TIMEOUT_SECONDS = 30.0
+# A wait of an hour is already far past any save; a larger value is a typo, and urllib raises OverflowError on an enormous one.
+MAX_TIMEOUT_SECONDS = 3600.0
 
 
-def data_dir():
-    return os.environ.get("CLAUDE_MEM_DATA_DIR") or os.path.expanduser("~/.claude-mem")
+def expand_home(path):
+    """The harness client's expandHome (src/shared/expand-home.ts): a leading ~ or ~/ is the home folder, joined the way node's
+    path.join does (so '~//x' is <home>/x); ~user is left alone."""
+    home = os.path.expanduser("~")
+    if path == "~":
+        return home
+    if path.startswith("~/") or (os.name == "nt" and path.startswith("~\\")):
+        return os.path.normpath(os.path.join(home, path[2:].lstrip("/\\" if os.name == "nt" else "/")))
+    return path
+
+
+def settings_target(document):
+    """Where claude-mem's keys live (settings-document.ts settingsTarget): the env block when it holds CLAUDE_MEM_* keys, else the root."""
+    env = document.get("env")
+    if isinstance(env, dict) and any(key.startswith("CLAUDE_MEM_") for key in env):
+        return env
+    return document
+
+
+def read_settings(path):
+    """The claude-mem settings in a settings.json (flat or wrapped in env), or {} when it is missing or unreadable."""
+    try:
+        with open(path, encoding="utf-8-sig") as settings_file:
+            document = json.load(settings_file)
+    except (OSError, ValueError):
+        return {}
+    return settings_target(document) if isinstance(document, dict) else {}
+
+
+def is_whole_number(value):
+    """An integer field's value: a JSON true is not one, though Python's bool is an int."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def worker_base_url():
-    settings = {}
-    try:
-        with open(os.path.join(data_dir(), "settings.json")) as settings_file:
-            settings = json.load(settings_file)
-    except (OSError, ValueError):
-        pass
+    """Where the worker listens, found the way the harness client finds it (resolveHarnessWorkerUrl in src/integrations/harness-worker.ts):
+    the environment, else the port and host in settings.json under CLAUDE_MEM_DATA_DIR or ~/.claude-mem. This only locates the worker.
+    The worker's ledger folder and database are never worked out here: the worker uses its own."""
+    settings_folder = expand_home(os.environ.get("CLAUDE_MEM_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".claude-mem"))
+    settings = read_settings(os.path.join(settings_folder, "settings.json"))
     port = os.environ.get("CLAUDE_MEM_WORKER_PORT") or settings.get("CLAUDE_MEM_WORKER_PORT") or str(37700 + (os.getuid() if hasattr(os, "getuid") else 77) % 100)
     host = os.environ.get("CLAUDE_MEM_WORKER_HOST") or settings.get("CLAUDE_MEM_WORKER_HOST") or "127.0.0.1"
     host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     return f"http://{host}:{port}"
 
 
-class NothingWritten(Exception):
-    """The worker refused a request it validates in full before writing anything (a 400 from the focus route)."""
+def request_timeout():
+    """Seconds to wait on the worker: CLAUDE_MEM_WORKER_TIMEOUT_SECONDS when set, else 30. A value that is not a finite number
+    above 0 and at most 3600 is refused with its name, before anything is sent."""
+    raw = os.environ.get("CLAUDE_MEM_WORKER_TIMEOUT_SECONDS")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds <= 0 or seconds > MAX_TIMEOUT_SECONDS:
+        sys.exit(f"CLAUDE_MEM_WORKER_TIMEOUT_SECONDS must be a positive number of seconds, at most {MAX_TIMEOUT_SECONDS:g}; got {raw!r}. Nothing was written.")
+    return seconds
 
 
-def worker_request(base_url, path, body=None, nothing_written_on=()):
+class WorkerFailure(Exception):
+    """A request the worker did not accept. `applied` is False when it never took the request or refused it whole (nothing was
+    written by it), None when the request was sent and no answer came back, so the worker may have applied it. `problems` are the
+    worker's own list of what it refused. `ambiguous` is the worker's own statement that it rolled the rows back but the rules file may
+    hold the new rules."""
+
+    def __init__(self, message, applied, problems=None, ambiguous=False):
+        super().__init__(message)
+        self.applied = applied
+        self.problems = problems or []
+        self.ambiguous = ambiguous
+
+
+def refusal_problems(body):
+    """The problems a refusal's JSON body lists, or [] when it is not the save route's own refusal."""
+    try:
+        problems = json.loads(body).get("problems")
+    except (ValueError, AttributeError):
+        return []
+    return [str(problem) for problem in problems] if isinstance(problems, list) else []
+
+
+def refusal_ambiguous(body):
+    """True when a refusal's JSON body says the rows were rolled back but the rules file may hold the new rules."""
+    try:
+        return json.loads(body).get("ambiguous") is True
+    except (ValueError, AttributeError):
+        return False
+
+
+def worker_request(base_url, path, body=None, timeout=DEFAULT_TIMEOUT_SECONDS):
+    """One request to the worker; answers its text, or raises WorkerFailure. urllib raises URLError only for a failure while
+    connecting or sending, when the worker never had the whole request. A timeout or a lost connection after the request went
+    out (an OSError or HTTPException that is not a URLError) is ambiguous for a POST: the worker may have applied it."""
     request = urllib.request.Request(base_url + path, method="POST" if body is not None else "GET",
                                      data=json.dumps(body).encode() if body is not None else None,
                                      headers={"Content-Type": "application/json"} if body is not None else {})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read().decode()
     except urllib.error.HTTPError as error:
-        if error.code in nothing_written_on:
-            raise NothingWritten(f"worker refused {path}: {error.code} {error.read().decode()}")
-        sys.exit(f"worker refused {path}: {error.code} {error.read().decode()}")
+        text = error.read().decode()
+        raise WorkerFailure(f"worker refused {path}: {error.code} {text}", applied=False, problems=refusal_problems(text),
+                            ambiguous=refusal_ambiguous(text))
     except urllib.error.URLError as error:
-        sys.exit(f"claude-mem worker is not reachable at {base_url} ({error.reason}). Start it with: npx claude-mem start")
+        raise WorkerFailure(f"claude-mem worker is not reachable at {base_url} ({error.reason}). Start it with: npx claude-mem start", applied=False)
+    except (OSError, http.client.HTTPException) as error:
+        reason = str(error) or type(error).__name__
+        raise WorkerFailure(f"claude-mem worker at {base_url} did not answer {path} ({reason})", applied=False if body is None else None)
 
 
 def comparable(text):
@@ -188,121 +271,114 @@ def unverified_quotes(goals, prompts):
 
 
 def shape_problems(goals):
-    """What keeps this answer from being saved as focus areas, asks and rules: the three tests' output, nothing else."""
+    """What keeps this file from being read as focus areas, asks and rules: its own shape, before its quotes can be checked.
+    How long a name or a rule may be, and what a number may hold, is the worker's call (POST /api/work-view/owner-goals/save)."""
     old_keys = [key for key in ("priorities", "open_asks") if key in goals]
     if old_keys:
         return [f'{", ".join(old_keys)}: the old shape. Sort every item into "focus_areas", "asks" or "rules" with the three tests']
     problems = []
     for key in ITEM_KEYS:
-        if not isinstance(goals.get(key, []), list):
+        items = goals.get(key, [])
+        if not isinstance(items, list):
             problems.append(f'"{key}" must be a list')
+        elif not all(isinstance(item, dict) for item in items):
+            problems.append(f'every item of "{key}" must be an object')
     if problems:
         return problems
     area_titles = [str(area.get("title") or "").strip() for area in goals.get("focus_areas", [])]
     for area in goals.get("focus_areas", []):
         title = str(area.get("title") or "").strip()
-        if not title or len(title) > MAX_AREA_NAME_CHARS:
-            problems.append(f'focus area {title!r}: a title of 1-{MAX_AREA_NAME_CHARS} characters')
-        if not str(area.get("goal") or "").strip() or len(str(area.get("goal") or "").strip()) > MAX_AREA_GOAL_CHARS:
-            problems.append(f'focus area {title!r}: a one-sentence "goal" of 1-{MAX_AREA_GOAL_CHARS} characters')
-        if not isinstance(area.get("rank"), int) or isinstance(area.get("rank"), bool) or area["rank"] < 1:
-            problems.append(f'focus area {title!r}: "rank" must be a whole number from 1')
+        if not title:
+            problems.append('a focus area needs a "title"')
+        if not str(area.get("goal") or "").strip():
+            problems.append(f'focus area {title!r}: a one-sentence "goal"')
+        if not is_whole_number(area.get("rank")):
+            problems.append(f'focus area {title!r}: "rank" must be a whole number')
         if "matches" not in area or not (area["matches"] is None or (isinstance(area["matches"], str) and area["matches"].strip())):
             problems.append(f'focus area {title!r}: "matches" must be the saved focus area id it already is, or null for a new area')
     for ask in goals.get("asks", []):
-        if len(str(ask.get("title") or "").strip()) > MAX_TITLE_CHARS:
-            problems.append(f'ask {ask.get("title")!r}: a title of at most {MAX_TITLE_CHARS} characters')
         if "focus_area" not in ask:
             problems.append(f'ask {ask.get("title")!r}: "focus_area" must name one of this answer\'s focus_areas titles, or be null')
         elif ask["focus_area"] is not None and ask["focus_area"] not in area_titles:
             problems.append(f'ask {ask.get("title")!r}: focus_area {ask["focus_area"]!r} is not a title in this answer\'s focus_areas')
     for rule in goals.get("rules", []):
-        then = str(rule.get("then") or "").strip()
-        if not then or len(then) > MAX_RULE_CHARS:
-            problems.append(f'rule {then!r}: a "then" of 1-{MAX_RULE_CHARS} characters')
         if not isinstance(rule.get("when", ""), str):
-            problems.append(f'rule {then!r}: "when" must be text (empty for always)')
+            problems.append(f'rule {rule_text(rule)!r}: "when" must be text (empty for always)')
+    # A JSON true is a boolean, not a count: the worker would store it as one.
+    for key, value in [("window_days", goals.get("window_days")), ("source_prompt_count", goals.get("source_prompt_count"))] \
+            + [("times_asked", item.get("times_asked")) for kind_key in ITEM_KEYS for item in goals.get(kind_key, [])]:
+        if isinstance(value, bool):
+            problems.append(f'"{key}" must be a whole number, not true or false')
     return problems
 
 
-def evidence_lines(item):
-    lines = []
-    for quote in item.get("evidence", []):
-        # Keep backslashes out of f-string expressions: Python 3.9-3.11 cannot parse them.
-        text = re.sub(r"\s+", " ", str(quote["quote"])).strip()[:MAX_QUOTE_CHARS]
-        lines.append(f'{str(quote["at"])[:16]} | {text}')
-    return lines
+def rule_text(rule):
+    """A rule's "then", as text."""
+    return str(rule.get("then") or "").strip()
 
 
-def item_fields(kind, item, snapshot, status, focus_area_id):
-    title = str(item["title"]).strip()
-    evidence = evidence_lines(item)
-    fields = {
-        "task": f"{KIND_LABELS[kind]}: {title}", "status": status, "goal_kind": kind,
-        "rank": item.get("rank"), "title": title,
-        **({"goal": str(item["goal"]).strip()} if kind == "focus-area" else {"focus_area": item.get("focus_area")}),
-        "focus_area_id": focus_area_id,
-        "latest_at": item.get("latest_at"), "times_asked": item.get("times_asked"),
-        "snapshot": snapshot, "evidence": "\n".join(evidence),
-    }
-    # One write holds at most 2,000 characters; the newest quotes come first, so trim from the end.
-    while len(json.dumps(fields)) > MAX_FIELDS_JSON_CHARS and len(evidence) > 1:
-        evidence.pop()
-        fields["evidence"] = "\n".join(evidence)
-    if len(json.dumps(fields)) > MAX_FIELDS_JSON_CHARS:
-        sys.exit(f"item too large to save even with one quote: {title}")
-    return fields
-
-
-def mined_area(area):
-    """One focus area as POST /api/work-view/focus/owner-goals takes it. Its quotes stay on the owner-goals item."""
-    return {
-        "name": str(area["title"]).strip(), "goal": str(area["goal"]).strip(), "rank": area.get("rank"),
-        "matches": area["matches"].strip() if isinstance(area["matches"], str) else None,
-        "evidence": f'From your prompts: asked {area.get("times_asked") or len(area.get("evidence", []))} times, latest {area.get("latest_at") or "not recorded"}.',
-    }
-
-
-def rule_preference(rule):
-    """One rule as a build-story preference, the input My Rules turns into a suggested rule."""
-    times = rule.get("times_asked")
-    return {
-        "preference": str(rule["then"]).strip(), "when": str(rule.get("when") or "").strip(), "kind": "directive",
-        "supportCount": times if isinstance(times, int) and times > 0 else len(rule.get("evidence", [])),
-        # Prompt headers are local minutes; the story keeps ISO times with the offset.
-        "quotes": [{"quote": re.sub(r"\s+", " ", str(quote["quote"])).strip(),
-                    "at": datetime.datetime.strptime(str(quote["at"])[:16], "%Y-%m-%d %H:%M").astimezone().isoformat()}
-                   for quote in rule.get("evidence", [])],
-        "source": RULE_SOURCE,
-    }
-
-
-def write_json_atomic(path, value):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    temp = f"{path}.tmp"
-    with open(temp, "w") as handle:
-        json.dump(value, handle, indent=2)
-    os.replace(temp, path)
-
-
-def save_rules(ledger_dir, preferences):
-    """Replace the rules an earlier save put in story.json; the story's own preferences stay."""
-    path = os.path.join(ledger_dir, "story.json")
-    story = {}
-    if os.path.exists(path):
-        with open(path) as handle:
-            story = json.load(handle)
-    story["preferences"] = [preference for preference in story.get("preferences", []) if preference.get("source") != RULE_SOURCE] + preferences
-    write_json_atomic(path, story)
-    return path
-
-
-def print_focus_areas(base_url):
-    view = json.loads(worker_request(base_url, "/api/work-view"))
+def print_focus_areas(base_url, timeout):
+    try:
+        view = json.loads(worker_request(base_url, "/api/work-view", timeout=timeout))
+    except WorkerFailure as failure:
+        sys.exit(str(failure))
     if "focusAreas" not in view:
         sys.exit("this claude-mem worker predates My Focus; update claude-mem and restart the worker")
     print(json.dumps([{"focusAreaId": area["focusAreaId"], "name": area["name"], "goal": area["goal"], "status": area["status"],
                        "mergedInto": area["mergedInto"]} for area in view["focusAreas"]], indent=2))
+
+
+def build_request(args, goals, dry_run):
+    """The one request a save sends: the goals the checks above left, the period and map, and the folder to assert, if one was named."""
+    request = {
+        "goals": {key: goals.get(key) for key in ("generated_at", "window_days", "source_prompt_count", "human_summary")},
+        "period": {"start": args.start.isoformat(), "end": args.end.isoformat()} if args.start else None,
+        "mapPath": os.path.abspath(args.map) if args.map else None,
+    }
+    for key in ITEM_KEYS:
+        request["goals"][key] = goals.get(key, [])
+    if args.ledger_dir:
+        request["ledgerDir"] = os.path.abspath(args.ledger_dir)
+    if dry_run:
+        request["dryRun"] = True
+    return request
+
+
+def not_applied(failure):
+    """A save the worker did not apply: every problem it listed, and that nothing was written (exit 1)."""
+    if failure.problems:
+        detail = "the worker refused this save:\n- " + "\n- ".join(failure.problems)
+    elif "refused " + SAVE_PATH + ": 404" in str(failure):
+        detail = f"this claude-mem worker predates the owner-goals save ({SAVE_PATH}); update claude-mem and restart the worker"
+    else:
+        detail = str(failure)
+    if failure.ambiguous:
+        print(f"{detail}\nThe rows were rolled back, but the rules file may hold the new rules. Run the same command again after fixing the cause: "
+              "every save replaces the owner-goals rules in that file, so the rerun replaces the same ones.", file=sys.stderr)
+        sys.exit(MAY_HAVE_APPLIED_EXIT)
+    sys.exit(f"{detail}\nNothing was written. Fix the cause and run it again.")
+
+
+def may_have_applied(detail):
+    """A save sent whose answer is not known (exit 3): the worker may or may not have applied it."""
+    print(f"{detail}\nThe worker may or may not have applied this save. Run the same command again: the save is recognized by its content, so one "
+          "the worker already applied changes nothing. Do not ask for a new answer first, as it would suggest its new focus areas a second time.", file=sys.stderr)
+    sys.exit(MAY_HAVE_APPLIED_EXIT)
+
+
+def send_save(base_url, timeout, request):
+    """Send the save and answer the worker's reply. Exits 1 when it was refused whole, 3 when no answer came back."""
+    try:
+        return json.loads(worker_request(base_url, SAVE_PATH, request, timeout=timeout))
+    except WorkerFailure as failure:
+        if failure.applied is None:
+            may_have_applied(str(failure))
+        not_applied(failure)
+    except ValueError as error:
+        may_have_applied(f"the worker answered the save with something that is not JSON ({error})")
+    except Exception:
+        traceback.print_exc()
+        may_have_applied("save_goals.py failed unexpectedly while the save was out")
 
 
 def main():
@@ -313,21 +389,19 @@ def main():
     parser.add_argument("--start", type=datetime.date.fromisoformat, help="first day the prompts cover, YYYY-MM-DD")
     parser.add_argument("--end", type=datetime.date.fromisoformat, help="day after the last day the prompts cover, YYYY-MM-DD")
     parser.add_argument("--carried-before", help="local minute the saved goals were exported, YYYY-MM-DD HH:MM: an older quote that no longer matches is dropped instead of refused")
-    parser.add_argument("--ledger-dir", help="My Work's folder holding story.json (default: <claude-mem data dir>/work-view)")
-    parser.add_argument("--dry-run", action="store_true", help="validate and print the writes without saving")
+    parser.add_argument("--ledger-dir", help="assert the folder the worker writes story.json in; the worker refuses any other (default: the worker's own folder)")
+    parser.add_argument("--dry-run", action="store_true", help="validate and print the request without saving; the worker plans and checks the save when it answers")
     parser.add_argument("--print-focus-areas", action="store_true", help="print the saved focus areas to match against, then exit")
     args = parser.parse_args()
+    timeout = request_timeout()
     base_url = worker_base_url()
     if args.print_focus_areas:
-        print_focus_areas(base_url)
+        print_focus_areas(base_url, timeout)
         return
     if not args.goals or not args.prompts:
         sys.exit("--goals and --prompts are required")
     if bool(args.start) != bool(args.end) or (args.start and args.end <= args.start):
         sys.exit("--start and --end go together, and --end must be after --start")
-    history = bool(args.end and args.end < datetime.date.today())
-    list_name = f"{LIST_NAME}/{args.start.isoformat()}" if history else LIST_NAME
-    ledger_dir = args.ledger_dir or os.path.join(data_dir(), "work-view")
 
     goals = json.load(open(args.goals))
     problems = shape_problems(goals)
@@ -356,78 +430,37 @@ def main():
     if len(set(titles)) != len(titles):
         sys.exit("two items share a title; give each focus area and ask its own title")
 
-    snapshot = str(goals.get("generated_at") or "")
-    state_fields = {
-        "human_summary": str(goals.get("human_summary") or "")[:1500] or None, "generated_at": snapshot or None,
-        "window_days": goals.get("window_days"), "source_prompt_count": goals.get("source_prompt_count"),
-        "map_path": os.path.abspath(args.map) if args.map else None, "status": "done" if history else "open",
-    }
-    if args.start:
-        state_fields.update(period_start=args.start.isoformat(), period_end=args.end.isoformat())
-    # A past month suggests no areas and no rules: those describe the owner now.
-    focus_request = {"areas": [mined_area(area) for area in areas]} if not history else None
-    preferences = [rule_preference(rule) for rule in rules] if not history else []
-
-    if focus_request is not None:
-        long_evidence = [area["name"] for area in focus_request["areas"] if len(area["evidence"]) > MAX_AREA_EVIDENCE_CHARS]
-        if long_evidence:
-            sys.exit(f"focus areas whose latest_at or times_asked make the evidence line longer than {MAX_AREA_EVIDENCE_CHARS} characters: {long_evidence}")
-
-    def writes_for(area_ids):
-        id_by_title = {str(area["title"]).strip(): area_id for area, area_id in zip(areas, area_ids)}
-        status = "done" if history else "todo"
-        return [state_fields] + [item_fields("focus-area", area, snapshot, status, id_by_title.get(str(area["title"]).strip())) for area in areas] \
-            + [item_fields("ask", ask, snapshot, status, id_by_title.get(ask.get("focus_area"))) for ask in asks]
-
-    # Every row is built (and refused if it cannot fit) before anything is written.
-    writes_for([LONGEST_FOCUS_AREA_ID] * len(areas))
     if args.dry_run:
-        # The ids a save would give new areas are not known until the worker writes them.
-        area_ids = [area["matches"] for area in focus_request["areas"]] if focus_request else [None] * len(areas)
-        print(json.dumps({"list": list_name, "focus_areas": focus_request, "writes": writes_for(area_ids),
-                          "rules": preferences, "unlinked_asks": unlinked_asks}, indent=2))
+        dry_run(base_url, timeout, build_request(args, goals, True), unlinked_asks)
         return
-    view = json.loads(worker_request(base_url, "/api/work-view"))
-    if "goals" not in view or "focusAreas" not in view or (history and "goalHistory" not in view):
-        sys.exit(f"this claude-mem worker predates {'Goals history' if history else 'My Focus'}; update claude-mem and restart the worker")
-    previous = (next((month for month in view["goalHistory"] if month["listName"] == list_name), None) if history else view["goals"]) or {}
+    reply = send_save(base_url, timeout, build_request(args, goals, False))
     try:
-        story_path, stale_tasks = write_everything(base_url, list_name, previous, focus_request, writes_for, ledger_dir, preferences, history, len(areas))
-    except NothingWritten as refusal:
-        # The first write was refused whole (a match to an area that is not saved): fixable, and nothing to undo.
-        sys.exit(str(refusal))
-    except SystemExit as failure:
-        if failure.code in (0, None):
-            raise
-        print(failure.code if isinstance(failure.code, str) else f"save_goals.py failed after it started writing ({failure.code})", file=sys.stderr)
-        sys.exit(FAILED_AFTER_WRITING_EXIT)
-    except Exception:
-        traceback.print_exc()
-        sys.exit(FAILED_AFTER_WRITING_EXIT)
-    print(json.dumps({"saved_focus_areas": len(areas), "saved_asks": len(asks), "saved_rules": len(preferences),
-                      "new_focus_areas": sum(1 for area in areas if area["matches"] is None) if not history else 0,
-                      "dropped_previous_items": len(stale_tasks), "aged_out_items": aged_out, "dropped_carried_quotes": dropped_carried,
-                      "unlinked_asks": unlinked_asks, "rules_file": story_path, "rules_not_saved_for_past_month": len(rules) if history else 0,
-                      "view": f"{base_url}/#cards", "list": list_name, "history": history}))
+        summary = {"saved_focus_areas": reply["savedFocusAreas"], "saved_asks": reply["savedAsks"], "saved_rules": reply["savedRules"],
+                   "new_focus_areas": reply["newFocusAreas"], "dropped_previous_items": reply["droppedPreviousItems"],
+                   "already_applied": reply["alreadyApplied"], "rules_file": reply["rulesFile"], "list": reply["list"], "history": reply["history"]}
+        if reply["applied"] is not True:
+            raise KeyError("applied")
+    except (KeyError, TypeError) as error:
+        may_have_applied(f"the worker's answer to the save was not the one expected (missing {error})")
+    print(json.dumps({**summary, "aged_out_items": aged_out, "dropped_carried_quotes": dropped_carried, "unlinked_asks": unlinked_asks,
+                      "rules_not_saved_for_past_month": len(rules) if summary["history"] else 0, "view": f"{base_url}/#cards"}))
 
 
-def write_everything(base_url, list_name, previous, focus_request, writes_for, ledger_dir, preferences, history, area_count):
-    """The writes, in order: My Focus areas, owner-goals rows, then rules. Everything was validated before this runs."""
-    area_ids = [None] * area_count
-    if focus_request is not None and focus_request["areas"]:
-        area_ids = json.loads(worker_request(base_url, "/api/work-view/focus/owner-goals", focus_request, nothing_written_on=(400,)))["focusAreaIds"]
-        if len(area_ids) != area_count:
-            sys.exit(f"the worker answered {len(area_ids)} focus area ids for {area_count} areas")
-    writes = writes_for(area_ids)
-    new_tasks = {fields["task"] for fields in writes[1:]}
-    stale_tasks = [item["task"] for item in previous.get("areas", []) + previous.get("asks", []) if item["task"] not in new_tasks]
-
-    home = os.path.expanduser("~")
-    for fields in writes + [{"task": task, "status": "dropped"} for task in stale_tasks]:
-        reply = worker_request(base_url, "/api/work-state/entries", {"cwd": home, "list": list_name, "fields": fields})
-        if not reply.startswith("Saved to"):
-            sys.exit(f"work state did not save: {reply[:300]}")
-    return (save_rules(ledger_dir, preferences) if not history else None), stale_tasks
+def dry_run(base_url, timeout, request, unlinked_asks):
+    """Print what a save would send and write. The worker plans and checks the save too when a worker answers; with none, the output says it was skipped."""
+    try:
+        reply = json.loads(worker_request(base_url, SAVE_PATH, request, timeout=timeout))
+        worker = {"checked": True, **reply}
+    except WorkerFailure as failure:
+        if failure.applied is None:
+            sys.exit(f"{failure}\nA dry run writes nothing; run it again.")
+        # A dry run writes nothing, so a worker that is not there, or that predates the save route, only means its check is skipped.
+        if failure.problems or ("not reachable" not in str(failure) and "refused " + SAVE_PATH + ": 404" not in str(failure)):
+            not_applied(failure)
+        worker = {"skipped": str(failure)}
+    except ValueError as error:
+        sys.exit(f"the worker answered the dry run with something that is not JSON ({error}); nothing was written")
+    print(json.dumps({"request": {key: value for key, value in request.items() if key != "dryRun"}, "unlinked_asks": unlinked_asks, "worker": worker}, indent=2))
 
 
 if __name__ == "__main__":

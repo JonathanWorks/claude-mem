@@ -1,9 +1,9 @@
 import type express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { Database } from 'bun:sqlite';
 import { openSqliteDatabase } from '../../../sqlite/open-database.js';
@@ -12,13 +12,14 @@ import { onContextInvalidation } from '../../../../shared/context-invalidation.j
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { logger } from '../../../../utils/logger.js';
 import { hasForwardedClientHeaders, hasLoopbackHostHeader, isLocalhost } from '../../../../server/middleware/request-auth-helpers.js';
-import { WorkStateSource, type WorkViewSnapshot } from '../../../work-view/data-source.mjs';
+import { reduceWorkState, WorkStateSource, type WorkViewSnapshot } from '../../../work-view/data-source.mjs';
 import { FILE_CONTENT_TYPES } from '../../../work-view/work-product.mjs';
 import { isInsideDeliverablesDir } from '../../../../shared/deliverables.js';
 import { contentFingerprint, LocalReviewStore } from '../../../work-view/review-store.js';
 import { MY_RULES_LIST, renderRulesFile, ruleRowFields, type SavedRule } from '../../../work-view/my-rules.mjs';
 import { focusAreaRowFields, MY_FOCUS_LIST, navWordIn, OTHER_FOCUS_AREA_ID, ownerGoalsAreaRows, placementRowFields, PROPOSAL_KINDS, readFocus, routerFocusRows, seedFocusRows, seedUndoRows, type FocusArea, type RouterFocusBody } from '../../../work-view/my-focus.mjs';
 import { MAX_WORK_STATE_FIELDS_JSON_CHARS } from '../../../work-view/work-state-limits.mjs';
+import { appliedSaveKeys, listOf, ownerGoalsSaveKey, planOwnerGoalsSave } from '../../../work-view/owner-goals-save.mjs';
 import { AGENT_LIFECYCLE_LIST, agentStopFields } from '../../../work-view/agent-lifecycle.mjs';
 import { getProjectContext } from '../../../../utils/project-name.js';
 import { chatCompletionsHumanCopyProvider, HumanCopyWorker } from '../../../work-view/human-copy-worker.mjs';
@@ -32,7 +33,7 @@ import { remoteRefreshTask } from '../../../work-view/refresh-job-client.js';
 import type { HostedIntent } from '../../../work-view/hosted-intent.js';
 import { isOpenRouterApiUrl } from '../../../../shared/openrouter-base-url.js';
 import { runAgentTask, type AgentRunnerDependencies } from '../../../agent-runner/run.js';
-import { ledgerSignature, readLedger } from '../../../work-view/request-groups.mjs';
+import { ledgerSignature, PREFERENCE_KINDS, readLedger, validateStory } from '../../../work-view/request-groups.mjs';
 import { applyLedgerWrite, type LedgerWriteOp, type LedgerWriteReply } from '../../../work-view/ledger-writes.mjs';
 import { inlineWorkViewReader, workerWorkViewReader, type WorkViewReader } from '../../../work-view/work-view-reader.js';
 import type { WorkViewReadInput } from '../../../work-view/work-view-sources.js';
@@ -40,6 +41,7 @@ import { runWithSqlScope } from '../../../sqlite/sql-scope.js';
 import { configuredJudge, decideSuggestion } from '../../../work-view/request-judge.mjs';
 import { configuredFocusJudge } from '../../../work-view/focus-judge.mjs';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
+import { workStateWriteRefusal, workStateWriteSchema } from './WorkStateRoutes.js';
 import { captureEvent } from '../../../telemetry/telemetry.js';
 import { isForeignLoopbackBrowserWrite } from './SettingsRoutes.js';
 import { validateBody } from '../middleware/validateBody.js';
@@ -128,7 +130,8 @@ const ruleBody = z.object({
 // Area ids are short generated tokens, bounded like rule ids. A name is a nav label and a goal one sentence:
 // 80 and 300 characters leave room for the evidence inside one 2000-character work-state row.
 // A request id is a JSON key, bounded like reviewBody's.
-const focusAreaIdField = z.string().min(1).max(80);
+const FOCUS_AREA_ID_MAX = 80;
+const focusAreaIdField = z.string().min(1).max(FOCUS_AREA_ID_MAX);
 const focusBody = z.object({
   action: z.enum(['keep', 'rename', 'edit-goal', 'merge', 'dismiss', 'done', 'reorder', 'move-request', 'restore-suggestion']),
   focusAreaId: focusAreaIdField.optional(),
@@ -143,16 +146,15 @@ const focusBody = z.object({
 // The focus areas owner-goals mined from the owner's prompts (save_goals.py). Same name and goal bounds as
 // focusBody. The evidence is one line pointing at the owner-goals item that holds the quotes; 300 characters
 // keeps the whole area inside one 2000-character work-state row. No count cap: the owner has as many areas as they have.
-const ownerGoalsFocusBody = z.object({
-  areas: z.array(z.object({
-    name: z.string().trim().min(1).max(80),
-    goal: z.string().trim().min(1).max(300),
-    rank: z.number().int().positive(),
-    /** The model's judgment: the saved area this one already is, or null for a new one. Never a name match. */
-    matches: focusAreaIdField.nullable(),
-    evidence: z.string().trim().min(1).max(300),
-  }).strict()),
+const ownerGoalsFocusAreaSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  goal: z.string().trim().min(1).max(300),
+  rank: z.number().int().positive(),
+  /** The model's judgment: the saved area this one already is, or null for a new one. Never a name match. */
+  matches: focusAreaIdField.nullable(),
+  evidence: z.string().trim().min(1).max(300),
 }).strict();
+const ownerGoalsFocusBody = z.object({ areas: z.array(ownerGoalsFocusAreaSchema) }).strict();
 
 // One checked focus-step answer (request-groups.mjs record-focus): router placements and areas proposed from Other.
 // Same name, sentence and request-id bounds as focusBody and reviewBody; a basis is focusBasis's 16 hex characters.
@@ -207,6 +209,68 @@ const markAgentFinishedBody = z.object({
   agentGroupId: z.string().min(1).max(2000),
 }).strict();
 
+// One change to the request ledger from a skill script (request-groups.mjs apply / record-progress / record-story / judge --apply,
+// save_goals.py's rules), as ledger-writes.mjs LedgerWriteOp takes it. `ledgerDir` is the folder the script means to write: a worker
+// whose ledger is another folder refuses, so a script run against a copy of the data cannot write the live ledger through the default
+// port (4096 is PATH_MAX). `apply`, `place` and `progress` payloads are checked by the write itself (a TypeError is a 400 that wrote
+// nothing); `story` is checked again here, since this input is not the CLI's own. No count caps, as the CLI has none. The client
+// (ledger-writes.mjs remoteLedgerWriter) sends `facts` with every change, empty for the ones that read none.
+const ledgerFactsField = z.object({
+  projects: z.record(z.string(), z.string().nullable()).optional(),
+  anchorAsks: z.record(z.string(), z.object({ text: z.string(), atEpoch: z.number().nullable().optional() }).passthrough().nullable()).optional(),
+}).strict();
+const ledgerNowField = z.number().int().positive();
+// One rule save_goals.py suggests in My Rules, as the ledger route takes it and the owner-goals check asks about it.
+const ownerGoalsRuleSchema = z.object({
+  // 200 UTF-16 code units, the unit validateStory's boundedText counts in. Not .max(200): zod counts code points, so
+  // 150 emoji would pass here and be refused later, when the story is rewritten with this rule in it.
+  preference: z.string().trim().min(1).refine(text => text.length <= 200, 'at most 200 UTF-16 code units'), when: z.string(),
+  kind: z.enum(PREFERENCE_KINDS as unknown as ['directive', 'correction', 'praise', 'frustration']),
+  supportCount: z.number().int().min(0),
+  quotes: z.array(z.object({ quote: z.string(), at: z.string().nullable() }).strict()),
+  source: z.literal('owner-goals'),
+}).strict();
+const ledgerWriteBody = z.object({
+  ledgerDir: z.string().min(1).max(4096),
+  op: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('apply'), decisions: z.unknown(), now: ledgerNowField, facts: ledgerFactsField.optional() }).strict(),
+    z.object({
+      kind: z.literal('place'),
+      placement: z.object({
+        key: z.string().min(1), root: z.string().nullable(), title: z.string(),
+        verdict: z.object({
+          requestId: z.string().nullable(), band: z.enum(['join', 'suggest', 'new']), confidence: z.number(),
+          evidence: z.string(), judge: z.string(), rejected: z.string().optional(),
+        }).passthrough(),
+        picked: z.object({ groupId: z.string(), anchor: z.string(), title: z.string() }).strict().nullable(),
+      }).strict(),
+      now: ledgerNowField, facts: ledgerFactsField.optional(),
+    }).strict(),
+    z.object({ kind: z.literal('progress'), answer: z.unknown(), now: ledgerNowField, facts: ledgerFactsField.optional() }).strict(),
+    z.object({ kind: z.literal('story'), validated: z.unknown(), now: ledgerNowField, facts: ledgerFactsField.optional() }).strict(),
+    z.object({
+      kind: z.literal('owner-goals-rules'),
+      preferences: z.array(ownerGoalsRuleSchema),
+    }).strict(),
+  ]),
+}).strict();
+
+// save_goals.py sends the goals file it parsed in ONE call, and the worker does the whole save (POST /api/work-view/owner-goals/save):
+// it builds every row itself from the input, with the real focus area ids, so nothing is sized or checked against a stand-in, then
+// validates each part with the schema its own write route uses (ownerGoalsFocusAreaSchema, workStateWriteSchema with
+// workStateWriteRefusal, ownerGoalsRuleSchema with validateStory) and applies all of it or none of it (saveOwnerGoals). Every problem is
+// answered, not the first. `ledgerDir` only asserts the folder the script means to write: a worker whose ledger is another folder refuses.
+const ownerGoalsSaveBody = z.object({
+  goals: z.record(z.string(), z.unknown()),
+  /** The days the prompts cover. A period that ended before today is a past month. */
+  period: z.object({ start: z.string(), end: z.string() }).strict().nullable().optional(),
+  mapPath: z.string().max(4096).nullable().optional(),
+  ledgerDir: z.string().min(1).max(4096).optional(),
+  /** Plan and check the save, write nothing, answer what it would write. */
+  dryRun: z.boolean().optional(),
+}).strict();
+const issuesOf = (error: z.ZodError): string => error.issues.map(issue => `${issue.path.join('.') || 'value'}: ${issue.message}`).join('; ');
+
 /** The owner's answer to the judge's "Looks like part of <request>" on a card. */
 const suggestionBody = z.object({
   conversationKey: z.string().min(1).max(2000),
@@ -220,6 +284,9 @@ const usageBody = z.discriminatedUnion('event', [
   z.object({ event: z.literal('opened'), view: z.enum(WORK_VIEW_PAGES) }).strict(),
   z.object({ event: z.literal('switched'), view: z.enum(WORK_VIEW_PAGES), previousView: z.enum(WORK_VIEW_PAGES) }).strict(),
 ]);
+
+/** The owner's local day, YYYY-MM-DD: the day a period is compared with to tell a past month. */
+const localDay = (date: Date): string => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
 /** A path as the owner reads it: `~/...` under the home folder, else absolute. */
 const homeRelative = (path: string) => path === homedir() || path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path;
@@ -261,6 +328,11 @@ interface WorkViewOptions {
   autoRefreshPlace?: Omit<AutoRefreshPlace, 'databasePath'>;
   /** Saves one work-state row (rule changes). Without it, rules are read-only. */
   appendWorkStateEntry?: ((entry: WorkStateWrite) => void) | null;
+  /**
+   * Saves several work-state rows as one transaction and runs `beforeCommit` inside it: every throw rolls every row back, so the
+   * rows are all saved or none is. The owner-goals save needs it; without it that save answers 503.
+   */
+  appendWorkStateEntriesAtomically?: ((entries: WorkStateWrite[], beforeCommit?: () => void) => void) | null;
   /** The project rule rows are saved under: the home folder's, like owner-goals. */
   homeProject?: string;
   /** <data dir>/MY-RULES.md: approved rules, rebuilt after every rule change, local or synced. */
@@ -425,6 +497,18 @@ export function defaultAutoRefresh(ledgerDir: string, settingsPath = USER_SETTIN
   });
 }
 
+/** Writes `bytes` so `path` is always the old bytes or the new bytes, never a fragment: a temp file beside it, then a rename. */
+function writeFileAtomically(path: string, bytes: Buffer, mode: number): void {
+  const temp = `${path}.${process.pid}-${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temp, bytes, { mode });
+    renameSync(temp, path);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* the temp file may never have been created; the original failure is the one to report */ }
+    throw error;
+  }
+}
+
 export class WorkViewRoutes extends BaseRouteHandler {
   /** Single-row lookups (evidence, files, deliverables) only: the scans that build the view run through `reader`. */
   private source: WorkStateSource;
@@ -448,6 +532,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
   private humanCopy: HumanCopyWorker | null;
   private autoRefresh: AutoRefreshWorker | null;
   private appendWorkStateEntry: ((entry: WorkStateWrite) => void) | null;
+  private appendWorkStateEntriesAtomically: ((entries: WorkStateWrite[], beforeCommit?: () => void) => void) | null;
   private homeProject: string | undefined;
   private rulesFilePath: string;
   private claudeInstructionsPath: string;
@@ -492,6 +577,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
         this.refreshScans(ledgerDir), { writeLedger: op => this.recordLedgerWrite(op), ...options.autoRefreshPlace, databasePath: this.databasePath }) : null)
       : options.autoRefresh;
     this.appendWorkStateEntry = options.appendWorkStateEntry ?? null;
+    this.appendWorkStateEntriesAtomically = options.appendWorkStateEntriesAtomically ?? null;
     this.homeProject = options.homeProject;
     this.rulesFilePath = options.rulesFilePath ?? join(DATA_DIR, 'MY-RULES.md');
     this.claudeInstructionsPath = options.claudeInstructionsPath ?? join(CLAUDE_CONFIG_DIR, 'CLAUDE.md');
@@ -627,6 +713,9 @@ export class WorkViewRoutes extends BaseRouteHandler {
     app.post('/api/work-view/focus/seed', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(seedFocusBody), this.wrapHandler(this.saveSeedFocus));
     app.post('/api/work-view/agents/mark-finished', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(markAgentFinishedBody), this.wrapHandler(this.markAgentFinished));
     app.post('/api/work-view/suggestions', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(suggestionBody), this.wrapHandler(this.answerSuggestion));
+    app.post('/api/work-view/ledger', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(ledgerWriteBody), this.wrapHandler(this.writeLedger));
+    app.get('/api/work-view/ledger-dir', workViewLoopbackOnly, this.wrapHandler(this.ledgerLocation));
+    app.post('/api/work-view/owner-goals/save', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(ownerGoalsSaveBody), this.wrapHandler(this.saveOwnerGoals));
     app.post('/api/work-view/rules/load-in-claude-code', workViewLoopbackOnly, requireWorkViewOrigin, this.wrapHandler(this.loadRulesInClaudeCode));
     app.post('/api/work-view/usage', workViewLoopbackOnly, requireWorkViewOrigin, validateBody(usageBody), this.wrapHandler(this.recordUsage));
     app.get('/api/setup/scan', workViewLoopbackOnly, this.wrapHandler((_req, res) => {
@@ -1049,6 +1138,173 @@ export class WorkViewRoutes extends BaseRouteHandler {
     if (!this.ledgerDir) throw new Error('The request ledger is unavailable on this worker.');
     return applyLedgerWrite(this.ledgerDir, op);
   });
+
+  /**
+   * Where this worker keeps the request ledger and its database, resolved by the worker's own resolveDataDir. A skill script asks
+   * instead of working the folder out itself (a second copy of that rule disagreed with this one on `~//x`).
+   */
+  private ledgerLocation = (_req: Request, res: Response): void => {
+    if (!this.ledgerDir) { res.status(503).json({ error: 'The request ledger is unavailable on this worker.' }); return; }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ledgerDir: this.ledgerDir, databasePath: this.databasePath });
+  };
+
+  /**
+   * The whole owner-goals save, all or nothing: save_goals.py sends the goals file it parsed and nothing else. In one turn of the
+   * serialized single-writer queue, with no await between reading what is saved and writing: the focus areas, the work-state rows and
+   * the rules are planned from what is saved NOW (planOwnerGoalsSave), every part is checked with its own write route's schema, and
+   * any problem refuses the save with every problem listed (400), nothing written. The My Focus rows and the owner-goals rows go in
+   * one SQLite transaction, and story.json is written inside it, last: a failed insert or a failed file write rolls every row back.
+   * If the commit itself fails after the file was written, the file is put back as it was, by the same temp-file-and-rename write, so it is
+   * always the old bytes or the new bytes, never a fragment; if even that fails, the file holds the new rules whole, the answer says so, and the
+   * rerun replaces those same rules, so it is safe, and the answer is `ambiguous` so the script exits 3, not 1. The save is idempotent by its
+   * content key: the list state keeps the keys of the last saves applied (save_keys, with the time each was applied), so the same save sent
+   * again after a lost answer, even after a newer save, is recognized and changes nothing, in a real run and in a dry run (a dry run of an
+   * applied save plans no writes). That is the only idempotency: generated_at is recorded data and decides nothing, and a save never applied
+   * is a new save and is applied. The store's contract: a throw means every row was rolled back.
+   */
+  private saveOwnerGoals = (req: Request, res: Response): Promise<void> => this.serialized(async () => {
+    const { goals, period = null, mapPath = null, ledgerDir, dryRun = false } = req.body as z.infer<typeof ownerGoalsSaveBody>;
+    const refuse = (status: number, problems: string[], extra: Record<string, unknown> = {}): void => { res.status(status).json({ applied: false, problems, ...extra }); };
+    if (!this.appendWorkStateEntriesAtomically) { refuse(503, ['Saving owner goals is unavailable on this worker.']); return; }
+    const today = localDay(new Date());
+    const { history, listName } = listOf(period, today);
+    if (!history && !this.ledgerDir) { refuse(503, ['The request ledger is unavailable on this worker.']); return; }
+    const project = this.homeProject ?? getProjectContext(homedir()).primary;
+    const problems: string[] = [];
+    if (!history && ledgerDir !== undefined) {
+      const otherFolder = this.otherLedgerFolder(ledgerDir);
+      if (otherFolder) problems.push(otherFolder);
+    }
+    let focusAreas: FocusArea[];
+    let listRows: Array<Record<string, unknown>>;
+    try {
+      const database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
+      try {
+        focusAreas = readFocus(database, { localDeviceId: this.localDeviceId() }).focusAreas;
+        listRows = database.prepare('SELECT * FROM work_state_entries WHERE list_name = ? AND project COLLATE NOCASE = ?').all(listName, project) as Array<Record<string, unknown>>;
+      } finally { database.close(); }
+    } catch (error) {
+      logger.warn('HTTP', 'Owner-goals save could not read the saved state', { error: error instanceof Error ? error.message : String(error) });
+      refuse(503, ['Local work is unavailable. Reconnect before saving owner goals.']);
+      return;
+    }
+    const saved = reduceWorkState(listRows).lists[0] as { fields: Record<string, unknown>; tasks: Array<{ name: string; status: string; isOpen: boolean }> } | undefined;
+    const count = (key: string): number => Array.isArray(goals[key]) ? (goals[key] as unknown[]).length : 0;
+    const previousKeys = appliedSaveKeys(saved?.fields);
+    const alreadyApplied = previousKeys.some(entry => entry.key === ownerGoalsSaveKey({ goals, period }));
+    if (alreadyApplied && problems.length === 0) {
+      res.setHeader('Cache-Control', 'no-store');
+      if (dryRun) {
+        // The save was applied before: it would write nothing, so a dry run lists no writes.
+        res.json({ applied: false, dryRun: true, alreadyApplied: true, list: listName, history, focusAreas: [], focusAreaRows: [], writes: [], rules: [] });
+        return;
+      }
+      logger.debug('HTTP', 'Owner-goals save already applied', { list: listName });
+      res.json({
+        applied: true, alreadyApplied: true, list: listName, history, savedFocusAreas: count('focus_areas'), savedAsks: count('asks'),
+        savedRules: history ? 0 : count('rules'), newFocusAreas: null, droppedPreviousItems: null, rulesFile: history ? null : join(this.ledgerDir as string, 'story.json'),
+      });
+      return;
+    }
+    const previousTasks = (saved?.tasks ?? []).filter(task => history ? task.status !== 'dropped' : task.isOpen).map(task => task.name);
+    const plan = planOwnerGoalsSave({ goals, period, mapPath }, { savedAreas: focusAreas, previousTasks, today, previousKeys });
+    problems.push(...plan.problems);
+    if (!('listName' in plan)) { refuse(400, problems); return; }
+    const excluded = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_EXCLUDED_PROJECTS;
+    plan.minedAreas.forEach((area, index) => {
+      const parsed = ownerGoalsFocusAreaSchema.safeParse(area);
+      if (!parsed.success) problems.push(`focus area ${index + 1}: ${issuesOf(parsed.error)}`);
+    });
+    plan.rows.forEach((fields, index) => problems.push(...this.rowProblems(fields, index, plan.listName, excluded)));
+    plan.preferences.forEach((rule, index) => {
+      const parsed = ownerGoalsRuleSchema.safeParse(rule);
+      if (!parsed.success) { problems.push(`rule ${index + 1}: ${issuesOf(parsed.error)}`); return; }
+      // The story rewrite validates a preference with validateStory; a quote has no bound in the ledger route, so none is asked here.
+      try { validateStory({ narrative: 'check', preferences: [{ ...parsed.data, quotes: [] }] }); }
+      catch (error) { problems.push(`rule ${index + 1}: ${error instanceof Error ? error.message : String(error)}`); }
+    });
+    if (problems.length) { refuse(400, problems); return; }
+    res.setHeader('Cache-Control', 'no-store');
+    if (dryRun) {
+      res.json({ applied: false, dryRun: true, alreadyApplied, list: plan.listName, history, focusAreas: plan.minedAreas, focusAreaRows: plan.areaRows, writes: plan.rows, rules: plan.preferences });
+      return;
+    }
+    const entries: WorkStateWrite[] = [
+      ...plan.areaRows.map(fields => ({ project, listName: MY_FOCUS_LIST, fields })),
+      ...plan.rows.map(fields => ({ project, listName: plan.listName, fields })),
+    ];
+    let rulesFile: string | null = null;
+    let storyBefore: Buffer | null = null;
+    try {
+      const storyPath = history ? null : join(this.ledgerDir as string, 'story.json');
+      storyBefore = storyPath !== null && existsSync(storyPath) ? readFileSync(storyPath) : null;
+      this.appendWorkStateEntriesAtomically(entries, history ? undefined : () => {
+        const reply = applyLedgerWrite(this.ledgerDir as string, { kind: 'owner-goals-rules', preferences: plan.preferences });
+        if ('done' in reply) rulesFile = (reply.done as { path: string }).path;
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // The rows are rolled back. A story written before the commit failed is put back as it was, so the save is all or nothing.
+      let restoreFailure: string | null = null;
+      if (rulesFile !== null) {
+        try { if (storyBefore === null) unlinkSync(rulesFile); else writeFileAtomically(rulesFile, storyBefore, 0o600); }
+        catch (restoreError) { restoreFailure = restoreError instanceof Error ? restoreError.message : String(restoreError); }
+      }
+      logger.warn('HTTP', 'Owner-goals save failed and was rolled back', { list: plan.listName, error: reason, rulesFileNotRestored: restoreFailure !== null });
+      if (restoreFailure !== null) {
+        refuse(500, [`The save failed (${reason}) and its rows were rolled back, but ${rulesFile} could not be put back as it was (${restoreFailure}). It holds the new rules, whole and readable, so running the same save again replaces those same rules.`], { ambiguous: true, rulesFile });
+        return;
+      }
+      refuse(500, [`The save failed and nothing was written: ${reason.replace(/\.$/, '')}.`]);
+      return;
+    }
+    logger.debug('HTTP', 'Owner-goals saved', { list: plan.listName, areaRows: plan.areaRows.length, rows: plan.rows.length, rules: plan.preferences.length });
+    res.json({
+      applied: true, alreadyApplied: false, list: plan.listName, history, savedFocusAreas: count('focus_areas'), savedAsks: count('asks'),
+      savedRules: plan.preferences.length, newFocusAreas: plan.newAreas, droppedPreviousItems: plan.droppedPrevious, focusAreaIds: plan.focusAreaIds, rulesFile,
+    });
+    void this.publish();
+  });
+
+  /** What /api/work-state/entries would refuse in one owner-goals row (its schema, then workStateWriteRefusal), as problem lines. */
+  private rowProblems(fields: Record<string, string | number | boolean | null>, index: number, list: string, excludedProjects: string): string[] {
+    const named = typeof fields.task === 'string' ? `row ${index + 1} (${fields.task})` : `row ${index + 1} (list state)`;
+    const parsed = workStateWriteSchema.safeParse({ cwd: homedir(), list, fields });
+    if (!parsed.success) return [`${named}: ${issuesOf(parsed.error)}`];
+    const refusal = workStateWriteRefusal(parsed.data, excludedProjects);
+    return refusal ? [`${named}: ${refusal.message}`] : [];
+  }
+
+  /** Why a script's ledger folder is not this worker's (the 409 text), or null when it is. Needs this.ledgerDir. */
+  private otherLedgerFolder(requested: string): string | null {
+    const canonical = (path: string) => existsSync(path) ? realpathSync(path) : resolve(path);
+    const served = canonical(this.ledgerDir as string), expected = canonical(requested);
+    return served === expected ? null : `This worker writes the request ledger in ${served}, not ${expected}. Nothing was written.`;
+  }
+
+  /**
+   * One ledger change from a skill script over HTTP, applied through recordLedgerWrite: the same queue and the same single writer as
+   * the refresh job's changes and the owner's answers. A 400 (a TypeError: the answer does not validate) and a 409 (the script's
+   * ledger folder is not this worker's) wrote nothing; `{ needFacts }` wrote nothing either, and the script sends it again with them.
+   */
+  private writeLedger = async (req: Request, res: Response): Promise<void> => {
+    const { ledgerDir, op } = req.body as z.infer<typeof ledgerWriteBody>;
+    if (!this.ledgerDir) { res.status(503).json({ error: 'The request ledger is unavailable on this worker.' }); return; }
+    const otherFolder = this.otherLedgerFolder(ledgerDir);
+    if (otherFolder) { res.status(409).json({ error: otherFolder }); return; }
+    let reply: LedgerWriteReply;
+    try {
+      reply = await this.recordLedgerWrite((op.kind === 'story' ? { ...op, validated: validateStory(op.validated) } : op) as LedgerWriteOp);
+    } catch (error) {
+      if (error instanceof TypeError) { this.badRequest(res, error.message); return; }
+      throw error;
+    }
+    logger.debug('HTTP', 'Ledger change from a skill script', { kind: op.kind, applied: 'done' in reply });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(reply);
+    if ('done' in reply) void this.publish();
+  };
 
   recordRouterFocus = (body: RouterFocusBody): Promise<{ placed: number; focusAreaIds: string[] }> => this.serialized(async () => {
     if (!this.appendWorkStateEntry) throw new Error('Saving focus areas is unavailable on this worker.');

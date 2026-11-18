@@ -1,8 +1,8 @@
 // Bun's native SQLite reader; source data is never opened for writing.
 import { openSqliteDatabase } from '../sqlite/open-database.js';
 import { readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveDbPath } from '../../shared/paths.js';
 import { createHash } from 'node:crypto';
 import { reduceWorkState } from './work-state-reduce.mjs';
 import { activitySignature, buildAgentView, readAgentRecords, readEvidence } from './agent-view.mjs';
@@ -45,7 +45,7 @@ export function resolveReadScope(database, requestedKeys) {
 
 export class WorkStateSource {
   constructor({
-    databasePath = process.env.CLAUDE_MEM_DB ?? join(homedir(), '.claude-mem', 'claude-mem.db'),
+    databasePath = process.env.CLAUDE_MEM_DB || resolveDbPath(),
     currentProject = '',
     parentProject = currentProject,
     titleCachePath = null,

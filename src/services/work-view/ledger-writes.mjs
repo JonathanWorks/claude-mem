@@ -4,7 +4,9 @@
 // synchronous read-modify-write of the file as it is THEN (applyLedgerWrite, called inside WorkViewRoutes' serialized queue,
 // the queue the owner's Join / Not this answers run in). No lock: with one writer, a change cannot be lost to another thread's
 // write, and writeJsonAtomic refuses a write from any other thread (LEDGER_OFF_MAIN_THREAD), so a second writer fails loudly
-// instead of racing. A skill script is a process of its own and writes its files itself (localLedgerWriter in request-groups.mjs).
+// instead of racing. A skill script is a process of its own: it sends each change to the worker over HTTP (POST /api/work-view/ledger,
+// the same queue), and writes the files itself only when run with --offline, for when no worker runs (localLedgerWriter in
+// request-groups.mjs; unsafe while a worker does).
 //
 // The main thread opens no database. A merge reads each touched conversation's project and each new group's first ask, so the
 // job reads those first (facts) and sends them with the change. The change decides which conversations are touched against the
@@ -12,7 +14,7 @@
 // the main thread answers `needFacts` instead of guessing, and the job reads what is missing and sends the change again.
 import {
   applyDecisionsWith, databaseLookups, factLookups, LEDGER_FACTS_NEEDED_CODE, readAgentWrittenPromptIds, readGroupsFile, recordingLookups,
-  writeDecisions, writeProgress, writeStory,
+  writeDecisions, writeOwnerGoalsRules, writeProgress, writeStory,
 } from './request-groups.mjs';
 import { placeConversation, writePlacement } from './request-judge.mjs';
 
@@ -32,6 +34,7 @@ export function applyLedgerWrite(dir, op) {
       case 'place': return { done: writePlacement(dir, op.placement, { now: op.now, lookups }) };
       case 'progress': return { done: writeProgress(dir, op.answer, { now: op.now }) };
       case 'story': return { done: writeStory(dir, op.validated, { now: op.now }) };
+      case 'owner-goals-rules': return { done: writeOwnerGoalsRules(dir, op.preferences) };
       default: throw new TypeError(`Unknown ledger write ${JSON.stringify(op?.kind)}.`);
     }
   } catch (error) {

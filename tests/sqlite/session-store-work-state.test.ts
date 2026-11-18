@@ -33,6 +33,40 @@ describe('SessionStore work state (v61)', () => {
     expect(entries.every(entry => entry.list_name === 'release' && entry.project === 'acme')).toBe(true);
   });
 
+  describe('appendWorkStateEntriesAtomically', () => {
+    it('saves every entry and runs beforeCommit inside the same transaction, after the last insert', () => {
+      store = new SessionStore(':memory:');
+      const seenInside: number[] = [];
+      store.appendWorkStateEntriesAtomically([
+        { project: 'acme', listName: 'my-focus', fields: { focus_area_id: 'fa_1' } },
+        { project: 'acme', listName: 'owner-goals', fields: { task: 'Ask: one', status: 'todo' } },
+      ], () => { seenInside.push(store!.getWorkStateEntries(['acme']).length); });
+
+      // EXECUTION: beforeCommit ran, and saw both rows already inserted, inside the open transaction.
+      expect(seenInside).toEqual([2]);
+      expect(store.getWorkStateEntries(['acme']).map(entry => entry.list_name)).toEqual(['my-focus', 'owner-goals']);
+    });
+
+    it('rolls every entry back when beforeCommit throws, and when a later insert fails', () => {
+      store = new SessionStore(':memory:');
+      store.appendWorkStateEntry({ project: 'acme', listName: 'kept', fields: { before: true } });
+      let ran = false;
+      expect(() => store!.appendWorkStateEntriesAtomically([
+        { project: 'acme', listName: 'my-focus', fields: { focus_area_id: 'fa_1' } },
+        { project: 'acme', listName: 'owner-goals', fields: { task: 'Ask: one' } },
+      ], () => { ran = true; throw new Error('the file write failed'); })).toThrow('the file write failed');
+      expect(ran).toBe(true);
+      expect(store.getWorkStateEntries(['acme']).map(entry => entry.list_name)).toEqual(['kept']);
+
+      // A row that cannot be stored (a null project violates NOT NULL) fails after the first insert succeeded: that first row is rolled back too.
+      expect(() => store!.appendWorkStateEntriesAtomically([
+        { project: 'acme', listName: 'my-focus', fields: { focus_area_id: 'fa_2' } },
+        { project: null as unknown as string, listName: 'owner-goals', fields: { task: 'Ask: two' } },
+      ])).toThrow();
+      expect(store.getWorkStateEntries(['acme']).map(entry => entry.list_name)).toEqual(['kept']);
+    });
+  });
+
   it('reads every requested project key, case-insensitively, and leaves other projects out', () => {
     store = new SessionStore(':memory:');
     store.appendWorkStateEntry({ project: 'acme', listName: 'release', fields: { version: '1.0' } });

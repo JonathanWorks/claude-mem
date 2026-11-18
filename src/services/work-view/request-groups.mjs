@@ -20,19 +20,23 @@
 //   bun request-groups.mjs record-focus [--limit 20 | --other] <file|->
 //                                                   place requests and propose areas (saved through the worker)
 //   bun request-groups.mjs refresh-needs [--days 14]  what the automatic refresh would do now
+//
+// apply, record-progress, record-story and judge --apply change the ledger through the running worker (its main thread is the
+// ledger's only writer) and refuse when none answers. Add --offline to write the files here instead, only when no worker runs.
 import { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isMainThread } from 'node:worker_threads';
+import { resolveDataDir, resolveDbPath } from '../../shared/paths.js';
 import { conversationKey, isConversationKey, isHumanActionRequest, originalFor, requestText } from './request-projection.mjs';
 import { GOAL_KINDS, goalKindOf, OWNER_GOALS_LIST } from './owner-goals.mjs';
 import { NO_PROJECT, projectRoot, upgradedGroupRoot, withDerivedProjects } from './session-project.mjs';
 import { isOwnerDismissedArea, isPlaceableArea, OTHER_FOCUS_AREA_ID, PROPOSAL_KINDS, readFocus } from './my-focus.mjs';
 
-const DATA_DIR = process.env.CLAUDE_MEM_DATA_DIR || join(homedir(), '.claude-mem');
-export const LEDGER_DIR = join(DATA_DIR, 'work-view');
+// The data folder is the worker's own resolveDataDir (environment, then settings.json, ~ expanded): the one function, so this script's
+// ledger folder and database are the worker's. There is no environment-only copy of it here.
+export const LEDGER_DIR = join(resolveDataDir(), 'work-view');
 /** Hook-recorded prompts the setup scan judged agent-written; they never become asks. */
 export const AGENT_WRITTEN_PROMPTS_FILE = 'agent-written-prompts.json';
 const DAY_MS = 86400000;
@@ -783,7 +787,8 @@ function option(args, name, fallback) {
 }
 
 function openDatabase() {
-  const path = process.env.CLAUDE_MEM_DB ?? join(DATA_DIR, 'claude-mem.db');
+  // CLAUDE_MEM_DB names the database file outright (a test or a copy); unset or empty, it is the worker's database.
+  const path = process.env.CLAUDE_MEM_DB || resolveDbPath();
   statSync(path);
   const database = new Database(path, { readonly: true, create: false });
   database.exec('PRAGMA busy_timeout = 1500');
@@ -975,7 +980,23 @@ export function writeStory(dir, validated, { now }) {
   return { recorded: 'story', preferences: written.preferences.length };
 }
 
-/** The writer for a process that owns its own writes (the skill script, tests): the three writes above, done here. */
+/**
+ * Replaces the rules owner-goals saved in story.json (source owner-goals) with `preferences`, and keeps the story's own preferences
+ * and every other key. A story that does not exist yet becomes `{ preferences }`. Refuses (TypeError) an entry from any other
+ * source, so a rules write can never delete the story's own preferences.
+ */
+export function writeOwnerGoalsRules(dir, preferences) {
+  if (!Array.isArray(preferences) || preferences.some((preference) => preference?.source !== OWNER_GOALS_LIST)) {
+    throw new TypeError(`preferences must be an array of rules with source "${OWNER_GOALS_LIST}".`);
+  }
+  const story = readStoryFile(dir) ?? {};
+  const own = (story.preferences ?? []).filter((preference) => preference?.source !== OWNER_GOALS_LIST);
+  const path = join(dir, 'story.json');
+  writeJsonAtomic(path, { ...story, preferences: [...own, ...preferences] });
+  return { recorded: 'owner-goals-rules', preferences: preferences.length, path };
+}
+
+/** The writer for a process that owns its own writes (the skill script run with --offline, tests): the three writes above, done here. */
 export function localLedgerWriter(dir) {
   return {
     apply: (decisions, { database, now }) => writeDecisions(dir, decisions, { now, lookups: databaseLookups(database, readAgentWrittenPromptIds(dir)) }),

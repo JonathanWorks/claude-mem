@@ -6,7 +6,7 @@
  * item split into an area and a rule.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fakeOwnerGoalsWorker } from '../helpers/fake-owner-goals-worker.js';
 import { scratchDir } from '../helpers/scratch-dir.js';
@@ -92,10 +92,9 @@ describe('owner-goals replay of the live 2026-10-26 items', () => {
 
   it('saves 5 areas, 13 asks and 4 rules, plus 1 item split into an area and a rule; a second run never overrides the owner', async () => {
     const dir = scratchDir('owner-goals-replay');
-    const worker = fakeOwnerGoalsWorker(join(dir, 'data'));
+    const worker = await fakeOwnerGoalsWorker(join(dir, 'data'));
     try {
-      const ledgerDir = join(dir, 'ledger');
-      mkdirSync(ledgerDir);
+      const ledgerDir = worker.ledgerDir;
       writeFileSync(join(dir, 'owner-prompts.md'), promptsFile());
       const save = async (answer: unknown) => {
         writeFileSync(join(dir, 'goals.json'), JSON.stringify(answer));
@@ -146,7 +145,7 @@ describe('owner-goals replay of the live 2026-10-26 items', () => {
       expect(after.get(idByName.get('TeamBrain')!)).toMatchObject({ status: 'dismissed', priorityRank: 5, decidedBy: 'owner' });
       expect(after.get(idByName.get('Onboarding')!)).toMatchObject({ status: 'suggested', priorityRank: 1, decidedBy: 'system' });
     } finally {
-      worker.stop();
+      await worker.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });

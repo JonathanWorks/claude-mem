@@ -49,10 +49,23 @@ export function applyDecisionsWith(stored: Record<string, any> | null, decisions
 export interface ApplyWritten { groups: number; conversations: number }
 export interface ProgressWritten { recorded: string; state: string; percent: number; readings: number }
 export interface StoryWritten { recorded: 'story'; preferences: number }
+/** A rule owner-goals saved as a story preference (save_goals.py rule_preference): always source 'owner-goals'. */
+export interface OwnerGoalsRule {
+  preference: string; when: string; kind: 'directive' | 'correction' | 'praise' | 'frustration'; supportCount: number;
+  quotes: Array<{ quote: string; at: string | null }>; source: 'owner-goals';
+}
+/** `path` is the story file written. */
+export interface OwnerGoalsRulesWritten { recorded: 'owner-goals-rules'; preferences: number; path: string }
 /** The ledger's writes: one synchronous read-modify-write of the file as it is now. Only the worker's main thread (or a process of its own) calls these. */
 export function writeDecisions(dir: string, decisions: unknown, options: { now: number; lookups: MergeLookups }): ApplyWritten;
 export function writeProgress(dir: string, answer: unknown, options: { now: number }): ProgressWritten;
 export function writeStory(dir: string, validated: { preferences: unknown[] } & Record<string, unknown>, options: { now: number }): StoryWritten;
+/** The kinds a story preference can have. */
+export const PREFERENCE_KINDS: readonly OwnerGoalsRule['kind'][];
+/** The build story as the model wrote it, checked and bounded (a TypeError when it does not validate). */
+export function validateStory(story: unknown): { narrative: string; preferences: Array<Record<string, unknown>> };
+/** Replaces the story's source-owner-goals preferences with `preferences`; the story's own and every other key stay. Throws a TypeError for an entry of another source. */
+export function writeOwnerGoalsRules(dir: string, preferences: OwnerGoalsRule[]): OwnerGoalsRulesWritten;
 /** Who writes the ledger for runCli and routeUndecided: the files here (localLedgerWriter), or the worker's main thread (ledger-writes.mjs). */
 export interface LedgerWriter {
   apply(decisions: unknown, context: { database: LedgerDatabase; now: number }): ApplyWritten | Promise<ApplyWritten>;

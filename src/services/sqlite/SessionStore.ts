@@ -3222,6 +3222,23 @@ export class SessionStore {
   }
 
   /**
+   * Appends every entry in one transaction, then runs `beforeCommit` (a synchronous write that must land with them, such as a file)
+   * inside it. Any throw, from an insert or from `beforeCommit`, rolls every entry back: the rows are all written or none is.
+   */
+  appendWorkStateEntriesAtomically(entries: Array<{ project: string; listName: string; fields: WorkStateFields }>, beforeCommit?: () => void): void {
+    this.db.transaction(() => {
+      for (const entry of entries) appendWorkStateEntryRow(this.db, entry);
+      beforeCommit?.();
+    })();
+    // The entries are committed: a listener that throws must not read as a save that failed.
+    try {
+      emitContextInvalidation({ projects: [...new Set(entries.map(entry => entry.project))] }, 'appendWorkStateEntry');
+    } catch (error) {
+      logger.warn('DB', 'A context invalidation listener failed after an atomic work-state save', {}, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
    * The id CloudSync syncs this device under, once it is resolved: work-state
    * reads order native rows as this device's writes, the way other devices
    * and the hosted service order them. Empty (the default) when sync has no device id.

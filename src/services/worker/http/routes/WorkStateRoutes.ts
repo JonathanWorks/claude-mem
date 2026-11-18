@@ -34,7 +34,7 @@ const workStateFieldsSchema = z.custom<WorkStateFields>(value =>
   'fields must map non-empty keys to strings, safe finite numbers, booleans or null',
 ).transform(fields => ({ ...fields }));
 
-const workStateWriteSchema = z.object({
+export const workStateWriteSchema = z.object({
   cwd: z.string().trim().min(1),
   list: z.string().trim().min(1).max(200),
   fields: workStateFieldsSchema
@@ -53,6 +53,36 @@ export function ownerGoalsRowRefusal(fields: WorkStateFields): string | null {
   if (onlyCloses && !('goal_kind' in fields)) return null;
   if (!(GOAL_KINDS as unknown[]).includes(fields.goal_kind)) {
     return `an owner-goals item needs goal_kind ${GOAL_KINDS.map(kind => `"${kind}"`).join(' or ')}; got ${JSON.stringify(fields.goal_kind ?? null)}.`;
+  }
+  return null;
+}
+
+/**
+ * Why a work-state write that already passed workStateWriteSchema is not saved (the answer's status and text), or null. The one
+ * place these rules live: handleWrite applies them, and the owner-goals save (POST /api/work-view/owner-goals/save) asks the
+ * same function for every row it builds, so a save is refused up front for exactly what the write would refuse.
+ */
+export function workStateWriteRefusal(
+  { cwd, list, fields }: { cwd: string; list: string; fields: WorkStateFields },
+  excludedProjects: string,
+): { status: number; message: string } | null {
+  if (isProjectExcluded(cwd, excludedProjects)) {
+    return { status: 200, message: 'Not saved: this project is excluded from claude-mem (CLAUDE_MEM_EXCLUDED_PROJECTS).' };
+  }
+  // My Rules rows become the user-level CLAUDE.md import (MY-RULES.md), so they are written only by the
+  // origin-checked /api/work-view/rules handler, never by an agent session or another local page.
+  if (isMyRulesList(list)) {
+    return { status: 403, message: `Not saved: "${list}" is written only from My Rules in the claude-mem viewer.` };
+  }
+  // My Focus rows are the owner's areas and placements; only the origin-checked /api/work-view/focus handler writes them.
+  if (isMyFocusList(list)) {
+    return { status: 403, message: `Not saved: "${list}" is written only from My Focus in the claude-mem viewer.` };
+  }
+  // Goals rows are validated, not blocked: save_goals.py writes them here. An item of a kind My Work cannot read
+  // would stop the whole view (the reader throws rather than guess), so it is refused at the door.
+  if (isOwnerGoalsList(list)) {
+    const refusal = ownerGoalsRowRefusal(fields);
+    if (refusal) return { status: 400, message: `Not saved: ${refusal}` };
   }
   return null;
 }
@@ -79,29 +109,11 @@ export class WorkStateRoutes extends BaseRouteHandler {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
 
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    if (isProjectExcluded(cwd, settings.CLAUDE_MEM_EXCLUDED_PROJECTS)) {
-      logger.debug('WORKER', 'Work state write skipped for an excluded project', { cwd, list });
-      res.send('Not saved: this project is excluded from claude-mem (CLAUDE_MEM_EXCLUDED_PROJECTS).');
+    const refusal = workStateWriteRefusal({ cwd, list, fields }, settings.CLAUDE_MEM_EXCLUDED_PROJECTS);
+    if (refusal) {
+      logger.debug('WORKER', 'Work state write refused', { cwd, list, status: refusal.status });
+      res.status(refusal.status).send(refusal.message);
       return;
-    }
-
-    // My Rules rows become the user-level CLAUDE.md import (MY-RULES.md), so they are written only by the
-    // origin-checked /api/work-view/rules handler, never by an agent session or another local page.
-    if (isMyRulesList(list)) {
-      res.status(403).send(`Not saved: "${list}" is written only from My Rules in the claude-mem viewer.`);
-      return;
-    }
-    // My Focus rows are the owner's areas and placements; only the origin-checked /api/work-view/focus handler writes them.
-    if (isMyFocusList(list)) {
-      res.status(403).send(`Not saved: "${list}" is written only from My Focus in the claude-mem viewer.`);
-      return;
-    }
-
-    // Goals rows are validated, not blocked: save_goals.py writes them here. An item of a kind My Work cannot read
-    // would stop the whole view (the reader throws rather than guess), so it is refused at the door.
-    if (isOwnerGoalsList(list)) {
-      const refusal = ownerGoalsRowRefusal(fields);
-      if (refusal) { res.status(400).send(`Not saved: ${refusal}`); return; }
     }
 
     const checkout = getProjectContext(cwd);

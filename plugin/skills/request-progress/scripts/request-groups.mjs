@@ -299,6 +299,9 @@ function resolveDataDir() {
   }
   return defaultDataDir;
 }
+function resolveDbPath() {
+  return join4(resolveDataDir(), DB_FILENAME);
+}
 var _dirname, DATA_DIR, DEFAULT_CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR, MARKETPLACE_ROOT, LOGS_DIR, USER_SETTINGS_PATH, DB_FILENAME, DB_PATH, OBSERVER_SESSIONS_DIR, OBSERVER_SESSIONS_PROJECT, paths;
 var init_paths = __esm({
   "src/shared/paths.ts"() {
@@ -1258,9 +1261,9 @@ var init_SettingsDefaultsManager = __esm({
         const result = applyEnvOverrides ? this.applyEnvOverrides(settings) : settings;
         this.dropVendorEndpoints(result);
         result.CLAUDE_MEM_WORKER_HOST = this.normalizeWorkerHost(result.CLAUDE_MEM_WORKER_HOST);
-        const dataDir = result.CLAUDE_MEM_DATA_DIR?.trim();
-        if (dataDir && result.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH === this.DEFAULTS.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH) {
-          result.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH = join6(expandHome(dataDir), "transcript-watch.json");
+        const dataDir2 = result.CLAUDE_MEM_DATA_DIR?.trim();
+        if (dataDir2 && result.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH === this.DEFAULTS.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH) {
+          result.CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH = join6(expandHome(dataDir2), "transcript-watch.json");
         }
         return result;
       }
@@ -2738,19 +2741,19 @@ function writePlacement(dir, placement, { now, lookups }) {
 }
 async function routeUndecided({ dir = LEDGER_DIR, database, judge = null, now = Date.now(), days = 14, apply = false, ledger: ledgerWriter = null }) {
   const judges = [rulesJudge, ...judge ? [judge] : []];
-  const ledger = readLedger(dir);
+  const ledger2 = readLedger(dir);
   const sinceEpoch = now - days * DAY_MS;
   const context = contextReader(database);
   const skip = /* @__PURE__ */ new Set();
   const routed = [], unplaced = [];
-  let working = ledger.groups;
-  const lookups = databaseLookups(database, ledger.agentWrittenPromptIds);
+  let working = ledger2.groups;
+  const lookups = databaseLookups(database, ledger2.agentWrittenPromptIds);
   const writer = ledgerWriter ?? { place: (placement, { now: at }) => writePlacement(dir, placement, { now: at, lookups }) };
   for (; ; ) {
-    const input = groupingInput({ ...ledger, groups: working }, database, { sinceEpoch, limit: Infinity, skip });
+    const input = groupingInput({ ...ledger2, groups: working }, database, { sinceEpoch, limit: Infinity, skip });
     if (!input.conversations.length) break;
     const { root } = input;
-    const anchors = new Map(readCandidates(database, { conversationKeys: input.openRequests.map((request) => request.anchor), excludedPromptIds: ledger.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
+    const anchors = new Map(readCandidates(database, { conversationKeys: input.openRequests.map((request) => request.anchor), excludedPromptIds: ledger2.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
     let openRequests = input.openRequests.map((request) => ({
       groupId: request.groupId,
       title: request.title,
@@ -2911,7 +2914,6 @@ var init_request_judge = __esm({
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync, renameSync as renameSync2, rmSync, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
 import { join as join9 } from "node:path";
 import { isMainThread } from "node:worker_threads";
 function placeholders(values) {
@@ -3334,9 +3336,9 @@ function readLedger(dir = LEDGER_DIR) {
     agentWrittenPromptIds: readAgentWrittenPromptIds(dir)
   };
 }
-function groupDetails(groupId, ledger, candidatesByKey) {
-  const group = ledger.groups.groups[groupId];
-  const conversations = Object.entries(ledger.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => candidatesByKey.get(key) ?? { conversationKey: key, outsideWindow: true });
+function groupDetails(groupId, ledger2, candidatesByKey) {
+  const group = ledger2.groups.groups[groupId];
+  const conversations = Object.entries(ledger2.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => candidatesByKey.get(key) ?? { conversationKey: key, outsideWindow: true });
   const loaded = conversations.filter((conversation) => !conversation.outsideWindow);
   return {
     groupId,
@@ -3348,28 +3350,28 @@ function groupDetails(groupId, ledger, candidatesByKey) {
     lastActivityEpoch: Math.max(0, ...loaded.map((conversation) => conversation.lastActivityEpoch ?? 0)),
     projects: [...new Set(loaded.map((conversation) => conversation.project))],
     conversations: conversations.map(({ lastActivityEpoch, startedAtEpoch, original, ...conversation }) => conversation),
-    previousReview: ledger.progress[groupId] ?? null
+    previousReview: ledger2.progress[groupId] ?? null
   };
 }
-function pendingReviews(ledger, database, sinceEpoch) {
-  const candidates = new Map(readCandidates(database, { sinceEpoch, excludedPromptIds: ledger.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
-  const ungrouped = [...candidates.keys()].filter((key) => !ledger.groups.conversations[key] && !ledger.groups.ignored?.[key]).length;
-  const ids = [...new Set([...candidates.keys()].map((key) => ledger.groups.conversations[key]).filter(Boolean))];
-  const due = ids.map((id) => groupDetails(id, ledger, candidates)).filter((group) => !reviewIsCurrent(group.previousReview, group.conversations.map((conversation) => conversation.conversationKey), group.lastActivityEpoch)).sort((a, b) => b.lastActivityEpoch - a.lastActivityEpoch);
+function pendingReviews(ledger2, database, sinceEpoch) {
+  const candidates = new Map(readCandidates(database, { sinceEpoch, excludedPromptIds: ledger2.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
+  const ungrouped = [...candidates.keys()].filter((key) => !ledger2.groups.conversations[key] && !ledger2.groups.ignored?.[key]).length;
+  const ids = [...new Set([...candidates.keys()].map((key) => ledger2.groups.conversations[key]).filter(Boolean))];
+  const due = ids.map((id) => groupDetails(id, ledger2, candidates)).filter((group) => !reviewIsCurrent(group.previousReview, group.conversations.map((conversation) => conversation.conversationKey), group.lastActivityEpoch)).sort((a, b) => b.lastActivityEpoch - a.lastActivityEpoch);
   return { due, ungrouped };
 }
-function openingAsks(database, ledger, conversationKeys) {
+function openingAsks(database, ledger2, conversationKeys) {
   const asks = /* @__PURE__ */ new Map();
   for (let index = 0; index < conversationKeys.length; index += CONVERSATIONS_PER_QUERY) {
-    for (const candidate of readCandidates(database, { conversationKeys: conversationKeys.slice(index, index + CONVERSATIONS_PER_QUERY), excludedPromptIds: ledger.agentWrittenPromptIds })) {
+    for (const candidate of readCandidates(database, { conversationKeys: conversationKeys.slice(index, index + CONVERSATIONS_PER_QUERY), excludedPromptIds: ledger2.agentWrittenPromptIds })) {
       asks.set(candidate.conversationKey, candidate.firstAsk);
     }
   }
   return asks;
 }
-function requestRecord(ledger, groupId, asks) {
-  const group = ledger.groups.groups[groupId], review = ledger.progress[groupId];
-  const conversations = groupConversations(ledger, groupId);
+function requestRecord(ledger2, groupId, asks) {
+  const group = ledger2.groups.groups[groupId], review = ledger2.progress[groupId];
+  const conversations = groupConversations(ledger2, groupId);
   return {
     anchor: group.anchor,
     groupId,
@@ -3383,47 +3385,47 @@ function requestRecord(ledger, groupId, asks) {
     conversationAsks: conversations.map((key) => requestText(asks.get(key) ?? null, FOCUS_ASK_CHARS)).filter(Boolean)
   };
 }
-function focusBasis(ledger, groupId) {
-  const group = ledger.groups.groups[groupId];
-  return createHash("sha256").update(JSON.stringify({ title: group.title, firstAsk: group.anchorAsk?.text ?? null, conversations: groupConversations(ledger, groupId) })).digest("hex").slice(0, 16);
+function focusBasis(ledger2, groupId) {
+  const group = ledger2.groups.groups[groupId];
+  return createHash("sha256").update(JSON.stringify({ title: group.title, firstAsk: group.anchorAsk?.text ?? null, conversations: groupConversations(ledger2, groupId) })).digest("hex").slice(0, 16);
 }
-function focusDue(ledger, focus, localDeviceId2) {
-  return Object.keys(ledger.groups.groups).filter((groupId) => {
-    const placement = focus.placementsByAnchor.get(ledger.groups.groups[groupId].anchor);
+function focusDue(ledger2, focus, localDeviceId2) {
+  return Object.keys(ledger2.groups.groups).filter((groupId) => {
+    const placement = focus.placementsByAnchor.get(ledger2.groups.groups[groupId].anchor);
     if (placement?.owner && focus.resolveFocusAreaId(placement.owner.focusAreaId)) return false;
     const router = placement?.router;
     if (!router || !focus.resolveFocusAreaId(router.focusAreaId)) return true;
-    return router.device === localDeviceId2 && router.basis != null && router.basis !== focusBasis(ledger, groupId);
+    return router.device === localDeviceId2 && router.basis != null && router.basis !== focusBasis(ledger2, groupId);
   });
 }
-function routerOther(ledger, focus, queued) {
-  return Object.keys(ledger.groups.groups).filter((groupId) => {
+function routerOther(ledger2, focus, queued) {
+  return Object.keys(ledger2.groups.groups).filter((groupId) => {
     if (queued.has(groupId)) return false;
-    const placement = focus.placementsByAnchor.get(ledger.groups.groups[groupId].anchor);
+    const placement = focus.placementsByAnchor.get(ledger2.groups.groups[groupId].anchor);
     if (placement?.owner && focus.resolveFocusAreaId(placement.owner.focusAreaId)) return false;
     return !!placement?.router && focus.resolveFocusAreaId(placement.router.focusAreaId) === OTHER_FOCUS_AREA_ID;
   });
 }
-function focusInput(ledger, focus, localDeviceId2, database, { limit = FOCUS_BATCH } = {}) {
-  const due = focusDue(ledger, focus, localDeviceId2);
+function focusInput(ledger2, focus, localDeviceId2, database, { limit = FOCUS_BATCH } = {}) {
+  const due = focusDue(ledger2, focus, localDeviceId2);
   return {
     areas: focus.focusAreas.filter(isPlaceableArea).map(focusAreaRecord),
     dismissed: focus.focusAreas.filter(isOwnerDismissedArea).map(focusAreaRecord),
-    requests: records(database, ledger, due.slice(0, limit)),
+    requests: records(database, ledger2, due.slice(0, limit)),
     remaining: Math.max(0, due.length - limit)
   };
 }
-function otherInput(ledger, focus, localDeviceId2, database) {
-  const other = routerOther(ledger, focus, new Set(focusDue(ledger, focus, localDeviceId2)));
-  const hash = otherPassHash(ledger, other);
+function otherInput(ledger2, focus, localDeviceId2, database) {
+  const other = routerOther(ledger2, focus, new Set(focusDue(ledger2, focus, localDeviceId2)));
+  const hash = otherPassHash(ledger2, other);
   return {
     areas: focus.focusAreas.filter(isPlaceableArea).map(focusAreaRecord),
     dismissed: focus.focusAreas.filter(isOwnerDismissedArea).map(focusAreaRecord),
-    other: records(database, ledger, other),
+    other: records(database, ledger2, other),
     due: hash !== null && hash !== focus.otherPassHash
   };
 }
-function validateFocusAnswer(answer, input, ledger, { other = false } = {}) {
+function validateFocusAnswer(answer, input, ledger2, { other = false } = {}) {
   if (!Array.isArray(answer?.placements)) throw new TypeError("The answer needs a placements array.");
   if (!Array.isArray(answer?.proposals)) throw new TypeError("The answer needs a proposals array (empty when there is nothing to propose).");
   const listed = new Map((other ? input.other : input.requests).map((request) => [request.anchor, request]));
@@ -3461,7 +3463,7 @@ function validateFocusAnswer(answer, input, ledger, { other = false } = {}) {
       if (!listed.has(anchor)) throw new TypeError(`${label} holds ${anchor}, which ${other ? "is not a listed Other request" : "was not asked about"}.`);
       if (held.has(anchor)) throw new TypeError(`${label} holds ${anchor}, which another proposal already holds.`);
       held.add(anchor);
-      return { anchorConversationKey: anchor, basis: focusBasis(ledger, listed.get(anchor).groupId) };
+      return { anchorConversationKey: anchor, basis: focusBasis(ledger2, listed.get(anchor).groupId) };
     });
     return {
       kind: proposal.kind,
@@ -3477,42 +3479,42 @@ function validateFocusAnswer(answer, input, ledger, { other = false } = {}) {
     placements: [...placed].filter(([anchor]) => !held.has(anchor)).map(([anchor, { focusAreaId, evidence }]) => ({
       anchorConversationKey: anchor,
       focusAreaId,
-      basis: focusBasis(ledger, listed.get(anchor).groupId),
+      basis: focusBasis(ledger2, listed.get(anchor).groupId),
       evidence
     })),
     proposals,
-    ...other ? { otherPassHash: otherPassHash(ledger, [...listed.keys()].filter((anchor) => !held.has(anchor)).map((anchor) => listed.get(anchor).groupId)) } : {}
+    ...other ? { otherPassHash: otherPassHash(ledger2, [...listed.keys()].filter((anchor) => !held.has(anchor)).map((anchor) => listed.get(anchor).groupId)) } : {}
   };
 }
 function refreshNeeds({ dir = LEDGER_DIR, database, now = Date.now(), days = 14, localDeviceId: localDeviceId2 }) {
   requireDeviceId(localDeviceId2);
-  const ledger = readLedger(dir);
-  const { due, ungrouped } = pendingReviews(ledger, database, now - days * DAY_MS2);
+  const ledger2 = readLedger(dir);
+  const { due, ungrouped } = pendingReviews(ledger2, database, now - days * DAY_MS2);
   const goals = readGoals(database);
   const generated = Date.parse(goals.generatedAt ?? "");
   const goalsStale = !Number.isFinite(generated) || now - generated > GOALS_STALE_MS;
   const focus = readFocus(database, { localDeviceId: localDeviceId2 });
-  const queued = focusDue(ledger, focus, localDeviceId2);
-  const otherHash = otherPassHash(ledger, routerOther(ledger, focus, new Set(queued)));
+  const queued = focusDue(ledger2, focus, localDeviceId2);
+  const otherHash = otherPassHash(ledger2, routerOther(ledger2, focus, new Set(queued)));
   const otherChanged = otherHash !== null && otherHash !== focus.otherPassHash;
   return { due: due.length, ungrouped, goalsStale, unplaced: queued.length, otherChanged, needed: Boolean(due.length || ungrouped || goalsStale || queued.length || otherChanged) };
 }
 function readInput(source) {
   return JSON.parse(readFileSync8(source === "-" ? 0 : source, "utf8"));
 }
-function textOption(args, name) {
-  const index = args.indexOf(`--${name}`);
-  return index === -1 ? null : args[index + 1] ?? null;
+function textOption(args2, name) {
+  const index = args2.indexOf(`--${name}`);
+  return index === -1 ? null : args2[index + 1] ?? null;
 }
-function option(args, name, fallback) {
-  const index = args.indexOf(`--${name}`);
+function option(args2, name, fallback) {
+  const index = args2.indexOf(`--${name}`);
   if (index === -1) return fallback;
-  const value = Number(args[index + 1]);
+  const value = Number(args2[index + 1]);
   if (!Number.isInteger(value) || value < 1) throw new TypeError(`--${name} must be a positive integer.`);
   return value;
 }
 function openDatabase() {
-  const path3 = process.env.CLAUDE_MEM_DB ?? join9(DATA_DIR2, "claude-mem.db");
+  const path3 = process.env.CLAUDE_MEM_DB || resolveDbPath();
   statSync5(path3);
   const database = new Database(path3, { readonly: true, create: false });
   database.exec("PRAGMA busy_timeout = 1500");
@@ -3527,9 +3529,9 @@ function readConversationProjects(database, conversationKeys) {
   }
   return new Map(withDerivedProjects(database, sessions).map((session) => [conversationKey(session), session.project]));
 }
-function groupingInput(ledger, database, { sinceEpoch, limit = GROUPING_BATCH, skip = null }) {
-  const candidates = readCandidates(database, { sinceEpoch, excludedPromptIds: ledger.agentWrittenPromptIds });
-  const decided = (key) => Boolean(ledger.groups.conversations[key] || ledger.groups.ignored?.[key] || skip?.has(key));
+function groupingInput(ledger2, database, { sinceEpoch, limit = GROUPING_BATCH, skip = null }) {
+  const candidates = readCandidates(database, { sinceEpoch, excludedPromptIds: ledger2.agentWrittenPromptIds });
+  const decided = (key) => Boolean(ledger2.groups.conversations[key] || ledger2.groups.ignored?.[key] || skip?.has(key));
   const fresh = candidates.filter((candidate) => !decided(candidate.conversationKey));
   if (!fresh.length) return { root: null, conversations: [], openRequests: [], proposedLinks: [], remaining: 0 };
   const root = projectRoot(fresh[0].project);
@@ -3538,10 +3540,10 @@ function groupingInput(ledger, database, { sinceEpoch, limit = GROUPING_BATCH, s
   const byKey = new Map(inRoot.map((candidate) => [candidate.conversationKey, candidate]));
   const rootIsStored = (group) => typeof group.projectRoot === "string" && group.projectRoot !== NO_PROJECT;
   const mayBeUpgraded = (group) => root.includes("/") && rootIsStored(group) && root.startsWith(`${group.projectRoot}/`);
-  const anchorProjects = readConversationProjects(database, Object.values(ledger.groups.groups).filter((group) => !rootIsStored(group) || mayBeUpgraded(group)).map((group) => group.anchor));
+  const anchorProjects = readConversationProjects(database, Object.values(ledger2.groups.groups).filter((group) => !rootIsStored(group) || mayBeUpgraded(group)).map((group) => group.anchor));
   const groupRoot = (group) => rootIsStored(group) ? upgradedGroupRoot(group.projectRoot, projectRoot(anchorProjects.get(group.anchor))) : projectRoot(anchorProjects.get(group.anchor)) ?? group.projectRoot ?? null;
-  const openRequests = Object.entries(ledger.groups.groups).filter(([groupId, group]) => groupRoot(group) === root && !CLOSED_STATES.has(ledger.progress[groupId]?.state)).map(([groupId, group]) => {
-    const members = Object.entries(ledger.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => byKey.get(key)).filter(Boolean);
+  const openRequests = Object.entries(ledger2.groups.groups).filter(([groupId, group]) => groupRoot(group) === root && !CLOSED_STATES.has(ledger2.progress[groupId]?.state)).map(([groupId, group]) => {
+    const members = Object.entries(ledger2.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => byKey.get(key)).filter(Boolean);
     const asks = members.flatMap((member) => member.asks).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     return {
       groupId,
@@ -3553,7 +3555,7 @@ function groupingInput(ledger, database, { sinceEpoch, limit = GROUPING_BATCH, s
     };
   }).sort((a, b) => b.lastActivityEpoch - a.lastActivityEpoch).map(({ lastActivityEpoch, ...request }) => ({ ...request, lastActivityAt: iso3(lastActivityEpoch) }));
   const batchKeys = new Set(batch.map((candidate) => candidate.conversationKey));
-  const proposedLinks = linkBackwards(inRoot).proposedGroups.filter((group) => group.links.length && group.conversations.some((key) => batchKeys.has(key))).flatMap((group) => group.links).map((link) => ({ ...link, groups: [...new Set(link.conversations.map((key) => ledger.groups.conversations[key]).filter(Boolean))] }));
+  const proposedLinks = linkBackwards(inRoot).proposedGroups.filter((group) => group.links.length && group.conversations.some((key) => batchKeys.has(key))).flatMap((group) => group.links).map((link) => ({ ...link, groups: [...new Set(link.conversations.map((key) => ledger2.groups.conversations[key]).filter(Boolean))] }));
   return {
     root,
     conversations: batch.map((candidate) => ({ conversationKey: candidate.conversationKey, project: candidate.project, startedAt: candidate.startedAt, openingAsk: requestText(candidate.firstAsk, 400), workLists: candidate.workLists })),
@@ -3566,6 +3568,19 @@ function databaseLookups(database, excludedPromptIds = null) {
   return {
     projectsOf: (keys) => readConversationProjects(database, keys),
     anchorAsksOf: (keys) => new Map(readCandidates(database, { conversationKeys: keys, excludedPromptIds }).map((candidate) => [candidate.conversationKey, candidate.original]))
+  };
+}
+function recordingLookups(lookups) {
+  const facts = { projects: {}, anchorAsks: {} };
+  const record = (table, inner) => (keys) => {
+    const found = inner(keys);
+    for (const key of new Set(keys)) if (table === "anchorAsks" || isConversationKey(key)) facts[table][key] = found.get(key) ?? null;
+    return found;
+  };
+  return {
+    projectsOf: record("projects", lookups.projectsOf),
+    anchorAsksOf: record("anchorAsks", lookups.anchorAsksOf),
+    facts: () => structuredClone(facts)
   };
 }
 function applyDecisionsWith(stored, decisions, now, lookups) {
@@ -3609,40 +3624,40 @@ function localLedgerWriter(dir) {
     recordStory: (validated, { now }) => writeStory(dir, validated, { now })
   };
 }
-function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), print: print2 = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId: localDeviceId2, saveFocus: saveFocus2 = null, judge = void 0, ledger: ledgerWriter = null } = {}) {
-  const [command, ...args] = argv;
+function runCli(argv2, { dir = LEDGER_DIR, database = null, now = Date.now(), print: print2 = (value) => console.log(JSON.stringify(value, null, 2)), localDeviceId: localDeviceId2, saveFocus: saveFocus2 = null, judge = void 0, ledger: ledgerWriter = null } = {}) {
+  const [command, ...args2] = argv2;
   const writer = ledgerWriter ?? localLedgerWriter(dir);
   const afterWrite = (written, show) => typeof written?.then === "function" ? written.then(show) : show(written);
   const db = () => database ?? openDatabase();
-  const since = () => now - option(args, "days", 14) * DAY_MS2;
+  const since = () => now - option(args2, "days", 14) * DAY_MS2;
   if (command === "candidates") {
-    const wantedRoot = textOption(args, "project");
-    const ledger = readLedger(dir);
-    const stored = ledger.groups;
-    const candidates = readCandidates(db(), { sinceEpoch: since(), excludedPromptIds: ledger.agentWrittenPromptIds }).filter((candidate) => !stored.ignored?.[candidate.conversationKey] && (wantedRoot == null || projectRoot(candidate.project) === wantedRoot));
+    const wantedRoot = textOption(args2, "project");
+    const ledger2 = readLedger(dir);
+    const stored = ledger2.groups;
+    const candidates = readCandidates(db(), { sinceEpoch: since(), excludedPromptIds: ledger2.agentWrittenPromptIds }).filter((candidate) => !stored.ignored?.[candidate.conversationKey] && (wantedRoot == null || projectRoot(candidate.project) === wantedRoot));
     const { proposedGroups, skippedLists } = linkBackwards(candidates);
-    const brief = args.includes("--brief");
+    const brief = args2.includes("--brief");
     const shown = candidates.map(({ lastActivityEpoch, startedAtEpoch, original, ...candidate }) => {
       const currentGroup = stored.conversations[candidate.conversationKey] ?? null;
       return brief ? { conversationKey: candidate.conversationKey, project: candidate.project, startedAt: candidate.startedAt, lastActivityAt: candidate.lastActivityAt, firstAsk: candidate.firstAsk.slice(0, 200), laterAsks: candidate.asks.slice(1, 4).map((ask) => ask.text.slice(0, 120)), workLists: candidate.workLists, currentGroup } : { ...candidate, currentGroup };
     });
     return print2({ candidates: shown, proposedGroups: proposedGroups.filter((group) => group.links.length), skippedLists, projects: [...new Set(candidates.map((candidate) => projectRoot(candidate.project)))] });
   }
-  if (command === "grouping-input") return print2(groupingInput(readLedger(dir), db(), { sinceEpoch: since(), limit: option(args, "limit", GROUPING_BATCH) }));
+  if (command === "grouping-input") return print2(groupingInput(readLedger(dir), db(), { sinceEpoch: since(), limit: option(args2, "limit", GROUPING_BATCH) }));
   if (command === "judge") {
-    return Promise.resolve().then(() => (init_request_judge(), request_judge_exports)).then(({ configuredJudge: configuredJudge2, routeUndecided: routeUndecided2 }) => routeUndecided2({ dir, database: db(), judge: judge === void 0 ? configuredJudge2() : judge, now, days: option(args, "days", 14), apply: args.includes("--apply"), ledger: ledgerWriter })).then(print2);
+    return Promise.resolve().then(() => (init_request_judge(), request_judge_exports)).then(({ configuredJudge: configuredJudge2, routeUndecided: routeUndecided2 }) => routeUndecided2({ dir, database: db(), judge: judge === void 0 ? configuredJudge2() : judge, now, days: option(args2, "days", 14), apply: args2.includes("--apply"), ledger: ledgerWriter })).then(print2);
   }
   if (command === "apply") {
-    const decisions = readInput(args[0] ?? "-");
+    const decisions = readInput(args2[0] ?? "-");
     return afterWrite(writer.apply(decisions, { database: db(), now }), print2);
   }
   if (command === "pending" || command === "show") {
-    const ledger = readLedger(dir);
+    const ledger2 = readLedger(dir);
     if (command === "show") {
-      if (!ledger.groups.groups[args[0]]) throw new TypeError(`Unknown group ${args[0]}.`);
-      const keys = Object.entries(ledger.groups.conversations).filter(([, id]) => id === args[0]).map(([key]) => key);
-      const candidates = new Map(readCandidates(db(), { conversationKeys: keys, fullAsks: true, excludedPromptIds: ledger.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
-      const details = groupDetails(args[0], ledger, candidates);
+      if (!ledger2.groups.groups[args2[0]]) throw new TypeError(`Unknown group ${args2[0]}.`);
+      const keys = Object.entries(ledger2.groups.conversations).filter(([, id]) => id === args2[0]).map(([key]) => key);
+      const candidates = new Map(readCandidates(db(), { conversationKeys: keys, fullAsks: true, excludedPromptIds: ledger2.agentWrittenPromptIds }).map((candidate) => [candidate.conversationKey, candidate]));
+      const details = groupDetails(args2[0], ledger2, candidates);
       const previous = details.previousReview;
       const amendSince = previous && reviewIsCurrent(previous, keys, 0) ? previous.reviewedThrough : null;
       const since2 = amendSince ? Date.parse(amendSince) : 0;
@@ -3659,12 +3674,12 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
       });
       return print2({ ...details, conversations, mode: amendSince ? "amend" : "full", amendSince, reviewBasis: { checkedThrough: iso3(now), conversations: keys.sort() } });
     }
-    const { due, ungrouped } = pendingReviews(ledger, db(), since());
-    const limit = option(args, "limit", 48);
+    const { due, ungrouped } = pendingReviews(ledger2, db(), since());
+    const limit = option(args2, "limit", 48);
     return print2({ due: due.length, groups: due.slice(0, limit).map((group) => ({ groupId: group.groupId, title: group.title, lastActivityAt: group.lastActivityAt, conversations: group.conversations.length })), deferred: Math.max(0, due.length - limit), ungroupedConversations: ungrouped });
   }
   if (command === "record-progress") {
-    const answer = readInput(args[0] ?? "-");
+    const answer = readInput(args2[0] ?? "-");
     return afterWrite(writer.recordProgress(answer, { now }), print2);
   }
   if (command === "story-input") {
@@ -3690,35 +3705,35 @@ function runCli(argv, { dir = LEDGER_DIR, database = null, now = Date.now(), pri
     });
   }
   if (command === "record-story") {
-    const validated = validateStory(readInput(args[0] ?? "-"));
+    const validated = validateStory(readInput(args2[0] ?? "-"));
     return afterWrite(writer.recordStory(validated, { now }), print2);
   }
   const focusQuestion = () => {
-    const ledger = readLedger(dir), focus = readFocus(db(), { localDeviceId: requireDeviceId(localDeviceId2) });
-    const other = args.includes("--other");
-    return { ledger, other, input: other ? otherInput(ledger, focus, localDeviceId2, db()) : focusInput(ledger, focus, localDeviceId2, db(), { limit: option(args, "limit", FOCUS_BATCH) }) };
+    const ledger2 = readLedger(dir), focus = readFocus(db(), { localDeviceId: requireDeviceId(localDeviceId2) });
+    const other = args2.includes("--other");
+    return { ledger: ledger2, other, input: other ? otherInput(ledger2, focus, localDeviceId2, db()) : focusInput(ledger2, focus, localDeviceId2, db(), { limit: option(args2, "limit", FOCUS_BATCH) }) };
   };
   if (command === "focus-input") return print2(focusQuestion().input);
   if (command === "record-focus") {
     if (!saveFocus2) throw new Error("record-focus saves through the claude-mem worker, and none was given.");
-    const { ledger, other, input } = focusQuestion();
-    const file = args.filter((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--limit").at(-1) ?? "-";
-    const body = validateFocusAnswer(readInput(file), input, ledger, { other });
+    const { ledger: ledger2, other, input } = focusQuestion();
+    const file = args2.filter((arg, index) => !arg.startsWith("--") && args2[index - 1] !== "--limit").at(-1) ?? "-";
+    const body = validateFocusAnswer(readInput(file), input, ledger2, { other });
     return Promise.resolve(saveFocus2(body)).then((saved) => print2({ placed: saved.placed, proposed: saved.focusAreaIds.length, focusAreaIds: saved.focusAreaIds }));
   }
-  if (command === "refresh-needs") return print2(refreshNeeds({ dir, database: db(), now, days: option(args, "days", 14), localDeviceId: localDeviceId2 }));
+  if (command === "refresh-needs") return print2(refreshNeeds({ dir, database: db(), now, days: option(args2, "days", 14), localDeviceId: localDeviceId2 }));
   throw new TypeError("Usage: request-groups.mjs candidates|grouping-input|judge|apply|pending|show|record-progress|story-input|record-story|focus-input|record-focus|refresh-needs (see file header).");
 }
-var DATA_DIR2, LEDGER_DIR, AGENT_WRITTEN_PROMPTS_FILE, DAY_MS2, GOALS_STALE_MS, MAX_CONVERSATIONS_PER_LINKING_LIST, PROGRESS_STATES, PREFERENCE_KINDS, USAGE_LEVELS, VALUE_LEVELS, LINK_KINDS, MAX_READINGS, iso3, groupIdFor, LEDGER_OFF_MAIN_THREAD_CODE, emptyGroups, isIsoOrNull, evidenceList, STORY_NARRATIVE_MAX, STORY_NARRATIVE_TARGET, STORY_RECAP_BUDGET, STORY_CHAPTER_MIN_BUDGET, STORY_CHARS_PER_WORD, STORY_REFUSAL_PARTS, FOCUS_ASK_CHARS, CONVERSATIONS_PER_QUERY, groupConversations, records, otherPassHash, focusAreaRecord, AREA_NAME_MAX, AREA_SENTENCE_MAX, requireDeviceId, GROUPING_BATCH, FOCUS_BATCH, CLOSED_STATES;
+var LEDGER_DIR, AGENT_WRITTEN_PROMPTS_FILE, DAY_MS2, GOALS_STALE_MS, MAX_CONVERSATIONS_PER_LINKING_LIST, PROGRESS_STATES, PREFERENCE_KINDS, USAGE_LEVELS, VALUE_LEVELS, LINK_KINDS, MAX_READINGS, iso3, groupIdFor, LEDGER_OFF_MAIN_THREAD_CODE, emptyGroups, isIsoOrNull, evidenceList, STORY_NARRATIVE_MAX, STORY_NARRATIVE_TARGET, STORY_RECAP_BUDGET, STORY_CHAPTER_MIN_BUDGET, STORY_CHARS_PER_WORD, STORY_REFUSAL_PARTS, FOCUS_ASK_CHARS, CONVERSATIONS_PER_QUERY, groupConversations, records, otherPassHash, focusAreaRecord, AREA_NAME_MAX, AREA_SENTENCE_MAX, requireDeviceId, GROUPING_BATCH, FOCUS_BATCH, CLOSED_STATES;
 var init_request_groups = __esm({
   "src/services/work-view/request-groups.mjs"() {
     "use strict";
+    init_paths();
     init_request_projection();
     init_owner_goals();
     init_session_project();
     init_my_focus();
-    DATA_DIR2 = process.env.CLAUDE_MEM_DATA_DIR || join9(homedir7(), ".claude-mem");
-    LEDGER_DIR = join9(DATA_DIR2, "work-view");
+    LEDGER_DIR = join9(resolveDataDir(), "work-view");
     AGENT_WRITTEN_PROMPTS_FILE = "agent-written-prompts.json";
     DAY_MS2 = 864e5;
     GOALS_STALE_MS = DAY_MS2;
@@ -3743,12 +3758,12 @@ var init_request_groups = __esm({
     STORY_REFUSAL_PARTS = 6;
     FOCUS_ASK_CHARS = 400;
     CONVERSATIONS_PER_QUERY = 400;
-    groupConversations = (ledger, groupId) => Object.entries(ledger.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => key).sort();
-    records = (database, ledger, groupIds) => {
-      const asks = openingAsks(database, ledger, groupIds.flatMap((groupId) => groupConversations(ledger, groupId)));
-      return groupIds.map((groupId) => requestRecord(ledger, groupId, asks));
+    groupConversations = (ledger2, groupId) => Object.entries(ledger2.groups.conversations).filter(([, id]) => id === groupId).map(([key]) => key).sort();
+    records = (database, ledger2, groupIds) => {
+      const asks = openingAsks(database, ledger2, groupIds.flatMap((groupId) => groupConversations(ledger2, groupId)));
+      return groupIds.map((groupId) => requestRecord(ledger2, groupId, asks));
     };
-    otherPassHash = (ledger, groupIds) => groupIds.length ? createHash("sha256").update(JSON.stringify(groupIds.map((groupId) => [ledger.groups.groups[groupId].anchor, focusBasis(ledger, groupId)]).sort())).digest("hex").slice(0, 16) : null;
+    otherPassHash = (ledger2, groupIds) => groupIds.length ? createHash("sha256").update(JSON.stringify(groupIds.map((groupId) => [ledger2.groups.groups[groupId].anchor, focusBasis(ledger2, groupId)]).sort())).digest("hex").slice(0, 16) : null;
     focusAreaRecord = (area) => ({ focusAreaId: area.focusAreaId, name: area.name, goal: area.goal, about: area.about, status: area.status });
     AREA_NAME_MAX = 80;
     AREA_SENTENCE_MAX = 300;
@@ -3769,13 +3784,31 @@ import { join as join10 } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
+
+// src/shared/connection-errors.ts
+var CONNECTION_REFUSED_CODES = /* @__PURE__ */ new Set(["ECONNREFUSED", "ConnectionRefused"]);
+function hasConnectionRefusedCode(error, seen) {
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+  if (error instanceof Error && error.message.includes("ECONNREFUSED")) return true;
+  const candidate = error;
+  if (typeof candidate.code === "string" && CONNECTION_REFUSED_CODES.has(candidate.code)) return true;
+  if (hasConnectionRefusedCode(candidate.cause, seen)) return true;
+  return Array.isArray(candidate.errors) && candidate.errors.some((nested) => hasConnectionRefusedCode(nested, seen));
+}
+function isConnectionRefusedError(error) {
+  if (hasConnectionRefusedCode(error, /* @__PURE__ */ new Set())) return true;
+  return error instanceof Error && error.message.includes("ECONNREFUSED");
+}
+
+// src/integrations/harness-worker.ts
 init_expand_home();
 init_hook_constants();
 function harnessSetting() {
-  const dataDir = expandHome(process.env.CLAUDE_MEM_DATA_DIR || join2(homedir2(), ".claude-mem"));
+  const dataDir2 = expandHome(process.env.CLAUDE_MEM_DATA_DIR || join2(homedir2(), ".claude-mem"));
   let settings = {};
   try {
-    const document = JSON.parse(readFileSync(join2(dataDir, "settings.json"), "utf8").replace(/^\uFEFF/, ""));
+    const document = JSON.parse(readFileSync(join2(dataDir2, "settings.json"), "utf8").replace(/^\uFEFF/, ""));
     const nested = document?.env;
     settings = nested && typeof nested === "object" && !Array.isArray(nested) && Object.keys(nested).some((key) => key.startsWith("CLAUDE_MEM_")) ? nested : document ?? {};
   } catch {
@@ -3793,7 +3826,54 @@ function resolveHarnessWorkerUrl() {
 // src/services/work-view/request-groups-cli.mjs
 init_paths();
 init_SettingsDefaultsManager();
+
+// src/services/work-view/ledger-writes.mjs
 init_request_groups();
+init_request_judge();
+var MAX_FACT_ROUNDS = 8;
+function readNeeded(lookups, needed, facts) {
+  const next = { projects: { ...facts.projects }, anchorAsks: { ...facts.anchorAsks } };
+  for (const [table, load] of [["projects", lookups.projectsOf], ["anchorAsks", lookups.anchorAsksOf]]) {
+    const keys = needed?.[table] ?? [];
+    if (!keys.length) continue;
+    const found = load(keys);
+    for (const key of keys) next[table][key] = found.get(key) ?? null;
+  }
+  return next;
+}
+function remoteLedgerWriter({ dir, send }) {
+  const request = async (op, merge) => {
+    let facts = { projects: {}, anchorAsks: {} };
+    const lookups = merge ? databaseLookups(merge.database, readAgentWrittenPromptIds(dir)) : null;
+    if (merge) {
+      const recording = recordingLookups(lookups);
+      try {
+        merge.dryRun(readGroupsFile(dir), recording);
+      } catch {
+      }
+      facts = recording.facts();
+    }
+    for (let round = 0; round < MAX_FACT_ROUNDS; round++) {
+      const reply = await send({ ...op, facts });
+      if ("done" in reply) return reply.done;
+      if (!lookups) throw new Error(`The main thread asked for conversation facts for a ledger write (${op.kind}) that reads none.`);
+      facts = readNeeded(lookups, reply.needFacts, facts);
+    }
+    throw new Error(`The ledger kept changing under a ${op.kind} write: the main thread still lacked conversation facts after ${MAX_FACT_ROUNDS} rounds. Nothing was written; run it again.`);
+  };
+  return {
+    apply: (decisions, { database, now }) => request({ kind: "apply", decisions, now }, { database, dryRun: (stored, lookups) => applyDecisionsWith(stored, decisions, now, lookups) }),
+    place: (placement, { database, now }) => request({ kind: "place", placement, now }, { database, dryRun: (stored, lookups) => placeConversation(stored, placement, { now, lookups }) }),
+    recordProgress: (answer, { now }) => request({ kind: "progress", answer, now }),
+    recordStory: (validated, { now }) => request({ kind: "story", validated, now })
+  };
+}
+
+// src/services/work-view/request-groups-cli.mjs
+init_request_groups();
+var OFFLINE_FLAG = "--offline";
+var LEDGER_ROUTE = "/api/work-view/ledger";
+var dataDir = resolveDataDir();
 async function saveFocus(body) {
   const base = resolveHarnessWorkerUrl();
   let response;
@@ -3807,14 +3887,36 @@ async function saveFocus(body) {
   if (!response.ok) throw new Error(`worker refused /api/work-view/focus/router: ${response.status} ${text2}`);
   return JSON.parse(text2);
 }
-var localDeviceId = SettingsDefaultsManager.loadFromFile(join10(resolveDataDir(), "settings.json"), true, { readOnly: true }).CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID ?? "";
+async function postLedgerWrite(op) {
+  const base = resolveHarnessWorkerUrl();
+  const refusal = `Nothing was written. Start the worker with: npx claude-mem start. With no worker running, add ${OFFLINE_FLAG} to write ${LEDGER_DIR} directly (unsafe while a worker runs).`;
+  let response;
+  try {
+    response = await fetch(`${base}${LEDGER_ROUTE}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ledgerDir: LEDGER_DIR, op }) });
+  } catch (error) {
+    if (isConnectionRefusedError(error)) throw new Error(`claude-mem worker is not reachable at ${base} (${error.message}). ${refusal}`);
+    throw new Error(`claude-mem worker at ${base} did not answer the ${op.kind} change (${error.message}). It may or may not have applied it: read the ledger before running it again (apply and record-story are safe to repeat; record-progress adds another reading).`);
+  }
+  const text2 = await response.text();
+  if (response.ok) return JSON.parse(text2);
+  if (response.status === 400) throw new TypeError(`worker refused the ${op.kind} change: ${text2}`);
+  if (response.status === 404) throw new Error(`This claude-mem worker (${base}) has no ${LEDGER_ROUTE} route: update claude-mem and restart the worker. ${refusal}`);
+  throw new Error(`worker refused ${LEDGER_ROUTE}: ${response.status} ${text2}. ${refusal}`);
+}
+var localDeviceId = SettingsDefaultsManager.loadFromFile(join10(dataDir, "settings.json"), true, { readOnly: true }).CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID ?? "";
 var output = "";
 var print = (value) => {
   output += `${JSON.stringify(value, null, 2)}
 `;
 };
+var argv = process.argv.slice(2);
+var offline = argv.includes(OFFLINE_FLAG);
+var args = argv.filter((arg) => arg !== OFFLINE_FLAG);
+var writesLedger = ["apply", "record-progress", "record-story"].includes(args[0]) || args[0] === "judge" && args.includes("--apply");
+if (offline && writesLedger) console.error(`${OFFLINE_FLAG}: writing ${LEDGER_DIR} directly, without the worker. Unsafe while a worker runs: a change it makes at the same moment can be lost.`);
+var ledger = offline ? null : remoteLedgerWriter({ dir: LEDGER_DIR, send: postLedgerWrite });
 try {
-  await runCli(process.argv.slice(2), { saveFocus, localDeviceId, print });
+  await runCli(args, { dir: LEDGER_DIR, saveFocus, localDeviceId, print, ledger });
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
