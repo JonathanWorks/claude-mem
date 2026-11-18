@@ -63,3 +63,6 @@ __pycache__/
 
 # Fixture homes written by tests (tests/services/prompt-import/token-usage.test.ts)
 tests/**/.generated/
+
+# wt worktrees live beside the repo, never in it
+.worktrees/
