@@ -41,7 +41,7 @@ async function start(refresh: ReturnType<typeof fakeRefresh>, ledger: { dir: str
     getStore: () => store, now: () => (clock += 1000), progressIntervalMs: 0,
     scanOptions: { homeDirectory, resolveProject: () => 'fixture' },
   });
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath: ledger?.databasePath ?? join(FIXTURE_HOME, 'no-work-state.db'), reviewPath: ':memory:', pollIntervalMs: 20,
     humanCopy: null, ledgerDir: ledger?.dir ?? null, setupScan, autoRefresh: refresh as unknown as AutoRefreshWorker, hostedIntent,
   });

@@ -9,26 +9,25 @@ import { DATA_DIR } from '../../src/shared/paths.js';
 import { openSqliteDatabase } from '../../src/services/sqlite/open-database.js';
 import { instrumentSlowQueries } from '../../src/services/sqlite/slow-query-log.js';
 import { openStatementWindow } from '../../src/services/sqlite/sql-scope.js';
-import { summarizeSql } from '../../src/services/sqlite/sql-text.js';
+import { SessionSearch } from '../../src/services/sqlite/SessionSearch.js';
+import { SessionStore } from '../../src/services/sqlite/SessionStore.js';
+import { LocalReviewStore } from '../../src/services/work-view/review-store.js';
 import { remoteRefreshTask } from '../../src/services/work-view/refresh-job-client.js';
 import { buildRefreshTask } from '../../src/services/work-view/refresh-task.js';
 import { applyLedgerWrite, type LedgerWriteOp } from '../../src/services/work-view/ledger-writes.mjs';
-import { readLedger } from '../../src/services/work-view/request-groups.mjs';
+import { groupIdFor, readLedger } from '../../src/services/work-view/request-groups.mjs';
 import { workerWorkViewReader, type WorkViewReader } from '../../src/services/work-view/work-view-reader.js';
+import { CloudSync } from '../../src/services/sync/CloudSync.js';
 import { WorkViewRoutes } from '../../src/services/worker/http/routes/WorkViewRoutes.js';
 import { everyRequestInOther, focusWriter } from '../helpers/fake-focus-writer.js';
-import { watchMainThreadStatements, type AllowedStatement, type WatchOptions } from '../helpers/main-thread-sql-witness.js';
+import { explainOn, triggersOn, watchMainThreadStatements, type MainThreadStatements } from '../helpers/main-thread-sql-witness.js';
 import type { AutoRefreshWorker } from '../../src/services/work-view/auto-refresh-worker.mjs';
-import type { RouterFocusBody } from '../../src/services/work-view/my-focus.mjs';
+import { MY_FOCUS_LIST, OTHER_FOCUS_AREA_ID, placementRowFields, type RouterFocusBody } from '../../src/services/work-view/my-focus.mjs';
 
 const DAY = 86400000;
 const PLUGIN_ROOT = join(import.meta.dir, '..', '..', 'plugin');
-/** The EXPLAIN QUERY PLAN steps SQLite gives a statement on `database` (what a reviewer reads before pinning them). */
-function planSteps(database: Database, sql: string, params: unknown[]): string[] {
-  const statement = database.prepare(`EXPLAIN QUERY PLAN ${sql}`);
-  try { return (statement.all(...params as never[]) as Array<{ detail: string }>).map(row => row.detail); } finally { statement.finalize(); }
-}
 const key = (session: string) => JSON.stringify(['conversation', 'claude', session]);
+const SYNTHETIC_DEVICE_ID = 'synthetic-device';
 const NEEDS = { due: 0, ungrouped: 1, goalsStale: false, unplaced: 0, otherChanged: false, needed: true };
 
 /** One conversation that started three days ago, so the 14-day window holds it. Synthetic. */
@@ -88,34 +87,66 @@ class CountingClient extends ContextReadWorkerClient {
 }
 
 /**
- * The one statement the main thread may run during a refresh: the worker's my-focus write (WorkViewRoutes.recordRouterFocus
- * appends through appendWorkStateEntry), modelled here by an INSERT into the fixture database. Every other statement
- * the instrumentation records on the main thread fails the test.
- */
-const FOCUS_INSERT_SQL = 'INSERT INTO work_state_entries (project, list_name, fields, created_at_epoch) VALUES (?, ?, ?, ?)';
-/** Built per test: its plan is taken on the fixture's own write connection, which exists only inside a test. */
-const mainThreadAllowed = (): AllowedStatement[] => [{
-  sql: FOCUS_INSERT_SQL,
-  reason: 'the my-focus write is a system-only write to the synced database and stays on the main thread (measured: one row insert per placement)',
-  expectedPlan: [],
-  writesTables: ['work_state_entries'],
-  plan: { database: writeDatabase, params: ['project', 'list', '{}', 0] },
-}];
-
-/**
- * The one read the main thread makes per request while a viewer is connected: WorkViewRoutes.snapshot() looks each request up in the
- * review sidecar (LocalReviewStore.read), and a focus write publishes a snapshot. The allowlist names the statement's exact text and the
- * EXACT plan a reviewer approved for it (below); the witness plans it on the sidecar and requires equality, parsing neither SQL nor plan.
+ * The two statements the main thread runs during a refresh with a viewer connected, and nothing else:
+ *  - the worker's my-focus write (WorkViewRoutes.recordRouterFocus appends through appendWorkStateEntry, which worker-service wires to
+ *    SessionStore.appendWorkStateEntry). The run here uses that very method, on a synthetic database, as the writer; its statement text
+ *    is never typed in this file: `focusWriteSql` is what one call of it was RECORDED to run (see `recordFocusWrite`);
+ *  - the one read per request that WorkViewRoutes.snapshot() makes in the review sidecar (LocalReviewStore.read), once per publish.
+ * The run's recorded statements are compared with exactly these two texts (see `offList`); no SQL and no plan is parsed or classified.
  */
 const REVIEW_READ_SQL = 'SELECT checked_at_epoch FROM work_view_reviews WHERE request_id = ? AND content_fingerprint = ?';
-const REVIEW_READ_REASON = 'snapshot() reads each request\'s review state from the sidecar: one primary-key lookup per request, per publish (measured: microseconds on the synthetic sidecar)';
-/** The plan a reviewer approved: request_id is the table's PRIMARY KEY, one row at most, through the auto index SQLite names below. */
+/** Every time an instrumented statement is prepared and then run, the window counts it twice. */
+const COUNTS_PER_STATEMENT = 2;
+/** The plan of the review read, pinned: request_id is the table's PRIMARY KEY, one row at most, through the auto index SQLite names below. */
 const REVIEW_READ_PLAN = ['SEARCH work_view_reviews USING INDEX sqlite_autoindex_work_view_reviews_1 (request_id=?)'];
-/** Most milliseconds the allowlisted statements (the review point reads and the my-focus inserts) may add up to on the main thread in one run (synthetic sidecar of REVIEW_SIDECAR_ROWS rows). */
-const ALLOWED_BUDGET_MS = 5;
 const REVIEW_SIDECAR_ROWS = 5000;
-/** Most milliseconds all the run's main-thread SQL may add up to (reads and the my-focus writes). */
+/**
+ * Requests the owner already has when the run starts (grouped, reviewed and sorted into Other, so the run has nothing to do for them), so that
+ * every publish reads the review sidecar once per request. The window reports whole milliseconds (it rounds each side's time), so a run of a
+ * handful of reads reads as 0 whether or not the time was added up; this many reads add up to a few ms.
+ */
+const LEDGER_REQUESTS = 200;
+/** Most milliseconds all the run's main-thread SQL (the review point reads and the my-focus inserts) may add up to, on a synthetic sidecar of REVIEW_SIDECAR_ROWS rows. */
 const TOTAL_SQL_BUDGET_MS = 25;
+/** A budget the over-budget probe must exceed with a statement that really costs time, and a recursion deep enough to take far longer than it. */
+const PROBE_BUDGET_MS = 5;
+const COSTLY_STATEMENT = 'WITH RECURSIVE counter(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 3000000) SELECT count(*) AS n FROM counter';
+
+/** The one statement text of a production my-focus write, as recorded from SessionStore.appendWorkStateEntry (set in beforeEach). */
+let focusWriteSql = '';
+/** What recording ONE call of that method saw: the run's expected my-focus statements are derived from it, never typed. */
+let focusWriteRecording: MainThreadStatements;
+/** The store the run's my-focus writes go through: the production class on a synthetic in-memory database. */
+let focusStore: SessionStore;
+/** The database the run's routes read (the job thread's reader, the pre-opened probe): the real schema, the store above holds it open. */
+let runDatabasePath: string;
+
+/** The same one conversation as fixtureDatabase, in the real schema. Synthetic. */
+function seedRunConversation(db: Database, at: number): void {
+  const started = at - 3 * DAY;
+  db.prepare("INSERT INTO sdk_sessions (id, platform_source, content_session_id, memory_session_id, project, user_prompt, started_at, started_at_epoch) VALUES (1, 'claude', 'a', 'm1', 'repo/tree', 'Build the release cards', ?, ?)")
+    .run(new Date(started).toISOString(), started);
+  db.prepare("INSERT INTO user_prompts (session_db_id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch) VALUES (1, 'a', 1, 'Build the release cards', ?, ?)")
+    .run(new Date(started).toISOString(), started);
+}
+
+/** One call of the real SessionStore.appendWorkStateEntry under the witness, in a list of its own (the statement text does not depend on the list). */
+function recordFocusWrite(store: SessionStore): MainThreadStatements {
+  const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+  let recording: MainThreadStatements;
+  try { store.appendWorkStateEntry({ project: 'home', listName: 'witness-calibration', fields: { note: 'one call, recorded' } }); }
+  finally { recording = witness.finish(); }
+  return recording;
+}
+
+/** The recorded statement texts that are not one of the two known texts. Empty means the run made no other statement. */
+const offList = (main: MainThreadStatements): string[] => main.seen.map(entry => entry.sql).filter(sql => sql !== focusWriteSql && sql !== REVIEW_READ_SQL);
+/** The connection LocalReviewStore runs its reads on (private to the class: the test reaches in because the plan must be taken on THAT object). */
+const reviewHandle = (store: unknown): Database => {
+  const handle = (store as { db: Database | null }).db;
+  if (!handle) throw new Error('LocalReviewStore has no open connection');
+  return handle;
+};
 
 /** A browser's open event stream, as far as WorkViewRoutes sees one: a response that takes writes. */
 class FakeStream {
@@ -133,6 +164,8 @@ let focusWriterOfFixture: ReturnType<typeof focusWriter>;
 let now: number;
 let routes: WorkViewRoutes | null;
 let reviewSidecar: Database | null;
+/** The database of the configured CloudSync the run's device id comes from (instrumented, so any SQL through it shows in the watch). */
+let cloudSyncDatabase: Database | null;
 const ledgerOfDefaultRefresh = join(DATA_DIR, 'work-view');
 
 beforeEach(() => {
@@ -140,21 +173,29 @@ beforeEach(() => {
   databasePath = join(directory, 'source.db');
   now = Date.now();
   writeFixtureFile(databasePath, now);
-  // The worker's my-focus write, standing in for its own connection: it belongs to the main thread, and is opened before any watch begins.
+  // The fixture-file writer of the job-thread tests and of the main-thread control below (not of the watched run, which writes through focusStore).
   writeDatabase = new Database(databasePath);
   writeDatabase.exec('PRAGMA busy_timeout = 1500');
-  // The fixture's connection stands in for the worker's own, which is opened through openSqliteDatabase and so is instrumented.
   instrumentSlowQueries(writeDatabase);
   focusWriterOfFixture = focusWriter(writeDatabase, { firstEpoch: now });
+  // The worker's my-focus write goes through SessionStore.appendWorkStateEntry; here, on a synthetic database opened (and so instrumented) before any watch.
+  runDatabasePath = join(directory, 'run-source.db');
+  focusStore = new SessionStore(runDatabasePath);
+  seedRunConversation(focusStore.db, now);
+  focusWriteRecording = recordFocusWrite(focusStore);
+  focusWriteSql = focusWriteRecording.seen[0]?.sql ?? '';
   rmSync(ledgerOfDefaultRefresh, { recursive: true, force: true });
   routes = null;
   reviewSidecar = null;
+  cloudSyncDatabase = null;
 });
 
 afterEach(async () => {
   await routes?.close();
   writeDatabase.close();
+  focusStore.close();
   reviewSidecar?.close();
+  cloudSyncDatabase?.close();
   rmSync(directory, { recursive: true, force: true });
   rmSync(ledgerOfDefaultRefresh, { recursive: true, force: true });
 });
@@ -169,16 +210,37 @@ describe('a refresh run through WorkViewRoutes', () => {
     };
   }
 
+  /**
+   * A CloudSync configured with synthetic credentials (no network: its fetch throws), on an instrumented database, with counters on the two
+   * methods a device id could be read through. Built before the watch, so its own setup is not recorded.
+   */
+  function configuredCloudSync(): { cloudSync: CloudSync; calls: { localDeviceId: number; status: number } } {
+    cloudSyncDatabase = instrumentSlowQueries(new Database(':memory:'));
+    new SessionStore(cloudSyncDatabase);
+    const cloudSync = new CloudSync(cloudSyncDatabase, {
+      CLAUDE_MEM_CLOUD_SYNC_TOKEN: 'synthetic-token', CLAUDE_MEM_CLOUD_SYNC_USER_ID: 'synthetic-user',
+      CLAUDE_MEM_CLOUD_SYNC_HUB_URL: 'https://hub.invalid', CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: SYNTHETIC_DEVICE_ID,
+    }, { fetchImpl: (async () => { throw new Error('no network in this test'); }) as unknown as typeof fetch, settingsPath: join(directory, 'sync-settings.json') });
+    const calls = { localDeviceId: 0, status: 0 };
+    const localDeviceId = cloudSync.localDeviceId.bind(cloudSync);
+    const status = cloudSync.status.bind(cloudSync);
+    cloudSync.localDeviceId = () => { calls.localDeviceId++; return localDeviceId(); };
+    cloudSync.status = () => { calls.status++; return status(); };
+    return { cloudSync, calls };
+  }
+
   /** The default automatic refresh, built by WorkViewRoutes' own constructor: it names no ledger and passes no autoRefresh. */
-  function defaultRoutes(options: { readerCalls: string[]; agent: ReturnType<typeof fakeAgent>; clients: CountingClient[]; focusRows: unknown[] }): WorkViewRoutes {
+  function defaultRoutes(options: { readerCalls: string[]; agent: ReturnType<typeof fakeAgent>; clients: CountingClient[]; focusRows: unknown[]; cloudSync: CloudSync }): WorkViewRoutes {
     return new WorkViewRoutes({
-      databasePath, reviewPath: join(directory, 'review.db'), setupStatePath: join(directory, 'setup-state.json'), settingsPath: join(directory, 'settings.json'),
+      databasePath: runDatabasePath, reviewPath: join(directory, 'review.db'), setupStatePath: join(directory, 'setup-state.json'), settingsPath: join(directory, 'settings.json'),
       rulesFilePath: join(directory, 'MY-RULES.md'), claudeInstructionsPath: join(directory, 'CLAUDE.md'), homeProject: 'home', humanCopy: null, pollIntervalMs: 600_000,
       reader: spyOnRealReader(options.readerCalls),
-      // The my-focus write is the one database write that belongs to the main thread: one row into the fixture.
-      appendWorkStateEntry: ({ project, listName, fields }) => {
-        options.focusRows.push(fields);
-        writeDatabase.prepare(FOCUS_INSERT_SQL).run(project, listName, JSON.stringify(fields), now + options.focusRows.length);
+      // Production's wiring (worker-service.ts): the routes take the CloudSync source and read the device id from it themselves.
+      getCloudSync: () => options.cloudSync,
+      // The my-focus write is the one database write that belongs to the main thread: production's own SessionStore method, as worker-service wires it.
+      appendWorkStateEntry: entry => {
+        options.focusRows.push(entry.fields);
+        focusStore.appendWorkStateEntry(entry);
       },
       autoRefreshPlace: { pluginRoot: PLUGIN_ROOT, agentRunner: options.agent.dependencies, createJobClient: () => { const client = new CountingClient(); options.clients.push(client); return client; } },
     });
@@ -187,8 +249,8 @@ describe('a refresh run through WorkViewRoutes', () => {
   const autoRefreshOf = (live: WorkViewRoutes) => (live as unknown as { autoRefresh: AutoRefreshWorker | null }).autoRefresh;
 
   /**
-   * A synthetic review sidecar of realistic size, and a read-only handle on it for EXPLAIN QUERY PLAN. The handle is a plain
-   * Database, not an instrumented connection, so what it runs is not recorded as main-thread work.
+   * A synthetic review sidecar of realistic size: rows written through a plain connection (not instrumented, so the seeding is not
+   * recorded as main-thread work) into the table the routes' LocalReviewStore created.
    */
   function seedReviewSidecar(): Database {
     const sidecar = new Database(join(directory, 'review.db'));
@@ -197,6 +259,22 @@ describe('a refresh run through WorkViewRoutes', () => {
     sidecar.transaction(() => { for (let index = 0; index < REVIEW_SIDECAR_ROWS; index++) insert.run(`synthetic-request-${index}`, `fingerprint-${index}`, now); })();
     return sidecar;
   }
+
+  /** A ledger of LEDGER_REQUESTS grouped, reviewed requests, written where the default refresh keeps its ledger, each placed in Other by the owner. Synthetic. */
+  function seedLedger(): void {
+    const groups: Record<string, unknown> = {}, conversations: Record<string, string> = {};
+    mkdirSync(join(ledgerOfDefaultRefresh, 'progress'), { recursive: true });
+    for (let index = 0; index < LEDGER_REQUESTS; index++) {
+      const anchor = key(`owned-${index}`), id = groupIdFor(anchor);
+      groups[id] = { title: `Owned request ${index}`, anchor, projectRoot: 'repo', links: [], decidedAt: null, anchorAsk: { text: `Ask ${index}` } };
+      conversations[anchor] = id;
+      focusStore.appendWorkStateEntry({ project: 'home', listName: MY_FOCUS_LIST, fields: placementRowFields({ anchorConversationKey: anchor, focusAreaId: OTHER_FOCUS_AREA_ID, placedBy: 'owner' }) });
+      writeFileSync(join(ledgerOfDefaultRefresh, 'progress', `${id}.json`), JSON.stringify({ groupId: id, state: 'in-progress', percent: 40, summary: 'Under way.', readings: [] }));
+    }
+    writeFileSync(join(ledgerOfDefaultRefresh, 'request-groups.json'), JSON.stringify({ version: 1, updatedAt: null, conversations, groups, ignored: {} }));
+  }
+
+  const countFocusRows = () => (focusStore.db.prepare('SELECT count(*) AS n FROM work_state_entries WHERE list_name = ?').get(MY_FOCUS_LIST) as { n: number }).n;
 
   /** What the routes do while a viewer is connected: the stream is in `clients`, and every publish is tracked so the run can wait for it. */
   function connectViewer(live: WorkViewRoutes): { stream: FakeStream; publishes: Promise<void>[] } {
@@ -214,7 +292,7 @@ describe('a refresh run through WorkViewRoutes', () => {
    * so this is the configuration production has). `probe` runs on the main thread inside the run (when the first agent question
    * arrives), standing for code that queries a database from here.
    */
-  async function runWatched(options: { agent?: ReturnType<typeof fakeAgent>; allowed?: AllowedStatement[]; probe?: (live: WorkViewRoutes) => void } = {}) {
+  async function runWatched(options: { agent?: ReturnType<typeof fakeAgent>; probe?: (live: WorkViewRoutes) => void } = {}) {
     const readerCalls: string[] = [];
     const clients: CountingClient[] = [];
     const focusRows: unknown[] = [];
@@ -223,14 +301,16 @@ describe('a refresh run through WorkViewRoutes', () => {
       if (options.probe && asked === 1 && !probed) { probed = true; options.probe(routes!); }
       return answerFor(prompt);
     });
-    routes = defaultRoutes({ readerCalls, agent, clients, focusRows });
+    seedLedger();
+    const focusRowsBefore = countFocusRows();
+    const { cloudSync, calls: deviceIdCalls } = configuredCloudSync();
+    routes = defaultRoutes({ readerCalls, agent, clients, focusRows, cloudSync });
     const refresh = autoRefreshOf(routes);
     // F6: the constructor built the default refresh. Without the needs handoff it would scan on this thread, on its own handle.
     expect(refresh).not.toBeNull();
     reviewSidecar = seedReviewSidecar();
     const viewer = connectViewer(routes);
-    const allowed = options.allowed ?? [...mainThreadAllowed(), { sql: REVIEW_READ_SQL, reason: REVIEW_READ_REASON, expectedPlan: REVIEW_READ_PLAN, plan: { database: reviewSidecar, params: ['synthetic-request-1', 'fingerprint-1'] } }];
-    const witness = watchMainThreadStatements(allowed, { maxAllowedMs: ALLOWED_BUDGET_MS });
+    const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
     let outcome: Awaited<ReturnType<AutoRefreshWorker['runNow']>>;
     let main: ReturnType<typeof witness.finish>;
     try {
@@ -238,42 +318,66 @@ describe('a refresh run through WorkViewRoutes', () => {
       // The focus write publishes without being awaited: let every publish the run caused finish before the watch ends.
       await Promise.all(viewer.publishes);
     } finally { main = witness.finish(); }
-    return { outcome, main, readerCalls, clients, focusRows, agent, refresh: refresh!, probed, viewer };
+    return { outcome, main, readerCalls, clients, focusRows, focusRowsBefore, agent, refresh: refresh!, probed, viewer, deviceIdCalls };
   }
 
-  it('runs every database read and write of the run on the job thread: the main thread runs the my-focus write and nothing else', async () => {
-    const { outcome, main, readerCalls, clients, focusRows, agent, refresh, viewer } = await runWatched();
+  it('runs every database read and write of the run on the job thread: the main thread runs the my-focus write and the one review read, and nothing else', async () => {
+    const { outcome, main, readerCalls, clients, focusRows, focusRowsBefore, agent, refresh, viewer, deviceIdCalls } = await runWatched();
 
-    // PROPOSITION: every statement the SQL instrumentation recorded on this thread, scoped or not, is on the reviewed allowlist.
-    expect(main.unexpected).toEqual([]);
-    // EXECUTION: the instrumentation was live for the run (it saw the my-focus write, as many times as rows were written).
-    const write = main.seen.find(entry => entry.sql === FOCUS_INSERT_SQL);
-    expect(write).toEqual({ sql: FOCUS_INSERT_SQL, count: 2 * focusRows.length });
-    // EXECUTION: a viewer was connected, the focus write published a snapshot to it, and that snapshot read the review sidecar on this
-    // thread: the read the allowlist holds is one the run really made (each statement counts twice: prepare, then get).
+    // The device id comes from a configured CloudSync, as in production. EXECUTION: the run read it through the accessor (the path was entered),
+    // and never through status(), whose COUNT(*) queries would also show in the multiset below.
+    expect(deviceIdCalls.localDeviceId).toBeGreaterThan(0);
+    expect(deviceIdCalls.status).toBe(0);
+
+    // (0) The my-focus writer is production's: one call of SessionStore.appendWorkStateEntry was recorded as exactly one statement text, run
+    // once (prepare, then run). A statement added to that method shows up as a second text or a higher count and fails here, before the run's
+    // expectation (derived from this recording) could absorb it.
+    expect(focusWriteRecording.seen).toEqual([{ sql: focusWriteSql, count: COUNTS_PER_STATEMENT }]);
+    expect(focusWriteRecording.total).toBe(COUNTS_PER_STATEMENT);
+    expect(focusWriteSql).not.toBe('');
+    // (1) PROPOSITION: the recorded statements are, as a multiset, the two known texts and nothing else. Nothing is parsed: any other text
+    // (a multi-statement exec included) is a different string and is listed here.
+    expect(offList(main)).toEqual([]);
+    expect(main.problem).toBeNull();
+    // EXECUTION: the instrumentation was live for the run (it saw the my-focus write, as many times as rows were written) and the writer
+    // really stored those rows (a stub that wrote nowhere would leave the store empty), and the viewer got a snapshot whose review reads ran on this thread.
+    expect(focusRows.length).toBeGreaterThan(0);
+    expect(countFocusRows() - focusRowsBefore).toBe(focusRows.length);
     expect(viewer.publishes.length).toBeGreaterThan(0);
     expect(viewer.stream.events).toContain('work-view');
-    const reviewReads = main.seen.find(entry => entry.sql === REVIEW_READ_SQL);
-    expect(reviewReads?.count).toBeGreaterThanOrEqual(2);
-    // PROPOSITION: nothing else ran on this thread, and the one read goes through the unique key its entry names, within its time budget.
-    expect(main.seen.map(entry => entry.sql).sort()).toEqual([FOCUS_INSERT_SQL, REVIEW_READ_SQL].sort());
-    // EXECUTION: every entry was planned: the insert has no plan step, the review read is one SEARCH on its unique index.
-    expect([...main.plans].sort((a, b) => a.sql.localeCompare(b.sql))).toEqual([
-      { sql: FOCUS_INSERT_SQL, steps: [] },
-      { sql: REVIEW_READ_SQL, steps: REVIEW_READ_PLAN },
+    const reviewReads = main.total - focusWriteRecording.total * focusRows.length;
+    expect(reviewReads).toBeGreaterThanOrEqual(2);
+    expect(reviewReads % 2).toBe(0);
+    expect([...main.seen].sort((a, b) => a.sql.localeCompare(b.sql))).toEqual([
+      { sql: focusWriteSql, count: focusWriteRecording.total * focusRows.length },
+      { sql: REVIEW_READ_SQL, count: reviewReads },
     ]);
-    expect(main.allowedMs).toBeLessThan(ALLOWED_BUDGET_MS);
-    // All of the run's SQL on this thread, the my-focus inserts included (measured about 1 ms), stays far under one event-loop stall.
+    // (2) All of the run's SQL on this thread adds up to less than the budget, and to something: a dead accumulator reads 0.
+    expect(main.sqlMs).toBeGreaterThan(0);
     expect(main.sqlMs).toBeLessThan(TOTAL_SQL_BUDGET_MS);
+
+    // (3) The plan of the review read, taken on the connection object LocalReviewStore ran it on (after the watch, so the EXPLAIN is not recorded).
+    const store = (routes as unknown as { reviews: { read(id: string, fingerprint: string): unknown } }).reviews;
+    const handle = reviewHandle(store);
+    // EXECUTION: a read through the store goes through that very object (a spy on its prepare sees the statement), so the plan is of the run's own connection.
+    const prepared: string[] = [];
+    const prepare = handle.prepare.bind(handle);
+    handle.prepare = ((sql: string) => { prepared.push(sql); return prepare(sql); }) as typeof handle.prepare;
+    store.read('synthetic-request-1', 'fingerprint-1');
+    handle.prepare = prepare as typeof handle.prepare;
+    expect(prepared).toEqual([REVIEW_READ_SQL]);
+    expect(explainOn(handle, REVIEW_READ_SQL, ['synthetic-request-1', 'fingerprint-1'])).toEqual(REVIEW_READ_PLAN);
 
     // The run happened, through the reader's needs scan and a job thread, and its work landed.
     expect(outcome).toBe('ok');
     expect(readerCalls).toEqual(['refreshNeeds']);
     expect(clients.length).toBe(1);
     expect(agent.prompts.length).toBeGreaterThanOrEqual(4);
-    expect(Object.values(readLedger(ledgerOfDefaultRefresh).groups.groups).map((group: any) => group.title)).toEqual(['Release cards']);
+    // The run's one new request joined the owner's LEDGER_REQUESTS.
+    const titles = Object.values(readLedger(ledgerOfDefaultRefresh).groups.groups).map((group: any) => group.title);
+    expect(titles).toHaveLength(LEDGER_REQUESTS + 1);
+    expect(titles).toContain('Release cards');
     expect(readLedger(ledgerOfDefaultRefresh).story.narrative).toBe('One request is under way.');
-    expect(focusRows.length).toBeGreaterThan(0);
     const status = refresh.status()!;
     expect(status.state).toBe('ok');
     expect(status.result).toBe('1 new conversations grouped, 1 requests reviewed, 1 requests placed, story written.');
@@ -285,18 +389,18 @@ describe('a refresh run through WorkViewRoutes', () => {
   it('hands the ten-minute needs scan to the reader: the check reads through it and runs no statement on the main thread', async () => {
     const agent = fakeAgent(answerFor);
     agent.dependencies.detect = async () => [];
-    const { outcome, main, readerCalls, clients } = await runWatched({ agent, allowed: [] });
+    const { outcome, main, readerCalls, clients } = await runWatched({ agent });
     // EXECUTION: the scan ran and found work to do (it went on to look for an agent, which there is none of).
     expect(outcome).toBe('waiting-for-agent');
     expect(readerCalls).toEqual(['refreshNeeds']);
     expect(main.total).toBe(0);
-    expect(main.unexpected).toEqual([]);
+    expect(main.problem).toBeNull();
     expect(clients).toEqual([]);
   }, 20_000);
 
-  describe('the witness fails on each way the main thread could read during the run', () => {
+  describe('the witness fails on each way the main thread could run a statement the run does not make', () => {
     it('a connection opened BEFORE the watch and queried during the run (the shape the Database.prototype patch missed)', async () => {
-      const preOpened = openSqliteDatabase(databasePath, { readonly: true, create: false });
+      const preOpened = openSqliteDatabase(runDatabasePath, { readonly: true, create: false });
       try {
         let answered: unknown = null;
         const { main, outcome, probed } = await runWatched({ probe: () => { answered = preOpened.prepare('SELECT count(*) AS n FROM sdk_sessions').get(); } });
@@ -304,231 +408,143 @@ describe('a refresh run through WorkViewRoutes', () => {
         expect(probed).toBe(true);
         expect(answered).toEqual({ n: 1 });
         expect(outcome).toBe('ok');
-        expect(main.unexpected).toContain('SELECT count(*) AS n FROM sdk_sessions');
+        expect(offList(main)).toEqual(['SELECT count(*) AS n FROM sdk_sessions']);
       } finally { preOpened.close(); }
     }, 30_000);
 
-    it('LocalReviewStore.read during the run', async () => {
-      let review: unknown = null;
-      // The review read is allowlisted for the real run (by its unique key); with it off the allowlist the same read is a failure.
+    it('another statement on the connection LocalReviewStore reads through', async () => {
+      let count: unknown = null;
       const { main, probed } = await runWatched({
-        allowed: mainThreadAllowed(),
-        probe: live => { review = (live as unknown as { reviews: { read(id: string, fingerprint: string): unknown } }).reviews.read('request-a', 'fingerprint-a'); },
+        probe: live => { count = reviewHandle((live as unknown as { reviews: unknown }).reviews).prepare('SELECT count(*) AS n FROM work_view_reviews').get(); },
       });
       expect(probed).toBe(true);
-      // The read reached the database (available), so the witness had a statement to see.
-      expect(review).toMatchObject({ available: true, checked: false });
-      expect(main.unexpected.some(sql => sql.includes('FROM work_view_reviews'))).toBe(true);
+      // EXECUTION: the probe read the synthetic sidecar's rows.
+      expect(count).toEqual({ n: REVIEW_SIDECAR_ROWS });
+      expect(offList(main)).toEqual(['SELECT count(*) AS n FROM work_view_reviews']);
     }, 30_000);
 
-    it('a statement outside the allowlist on the SAME connection as an allowlisted one', async () => {
-      const { main } = await runWatched({ probe: () => { writeDatabase.prepare('SELECT count(*) AS n FROM work_state_entries').get(); } });
-      expect(main.unexpected).toEqual(['SELECT count(*) AS n FROM work_state_entries']);
+    it('a statement outside the two texts on the SAME connection as the my-focus write', async () => {
+      const { main } = await runWatched({ probe: () => { focusStore.db.prepare('SELECT count(*) AS n FROM work_state_entries').get(); } });
+      expect(offList(main)).toEqual(['SELECT count(*) AS n FROM work_state_entries']);
+    }, 30_000);
+
+    it('a multi-statement exec that begins with the my-focus insert', async () => {
+      const MULTI = "INSERT INTO work_state_entries (project, list_name, fields, created_at, created_at_epoch) VALUES ('p', 'l', '{}', 't', 0); DELETE FROM work_state_entries WHERE id < 0";
+      const { main, probed } = await runWatched({ probe: () => { focusStore.db.exec(MULTI); } });
+      expect(probed).toBe(true);
+      // The text is not either known text, so it is listed whole, with its second statement.
+      expect(offList(main)).toEqual([MULTI]);
     }, 30_000);
   });
 
-  describe('the witness pins each allowlisted statement to the exact plan a reviewer approved, and classifies nothing', () => {
-    const SCHEMA = `CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, team INTEGER);
-      CREATE INDEX people_name ON people (name);
-      CREATE TABLE reviews (request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, at INTEGER);
-      CREATE UNIQUE INDEX reviews_key ON reviews (request_id, fingerprint);
-      CREATE TABLE tags (id INTEGER PRIMARY KEY, label TEXT UNIQUE)`;
-    const PK_EQUALITY = ['SEARCH people USING INTEGER PRIMARY KEY (rowid=?)'];
-    const KEY_EQUALITY = ['SEARCH reviews USING INDEX reviews_key (request_id=? AND fingerprint=?)'];
-    const BY_ID = 'SELECT name FROM people WHERE id = ?';
-    const INSERT = 'INSERT INTO people (id, name, team) VALUES (?, ?, ?)';
-    const BUDGET = { maxAllowedMs: 1000 };
-    /** An instrumented connection (what the worker runs) and a plain one on the same schema (what EXPLAIN QUERY PLAN runs on), both with 1000 rows per table. */
-    function connections(extraSchema = '') {
-      const planner = new Database(':memory:');
-      const worker = instrumentSlowQueries(new Database(':memory:'));
-      for (const database of [planner, worker]) {
-        database.exec(SCHEMA);
-        if (extraSchema) database.exec(extraSchema);
-        for (let id = 1; id <= 1000; id++) {
-          database.prepare('INSERT INTO people (id, name, team) VALUES (?, ?, ?)').run(id, `n${id % 10}`, id % 3);
-          database.prepare('INSERT INTO reviews (request_id, fingerprint, at) VALUES (?, ?, ?)').run(`r${id}`, `f${id}`, id);
-          database.prepare('INSERT INTO tags (id, label) VALUES (?, ?)').run(id, `l${id}`);
-        }
-      }
-      return { planner, worker };
-    }
-    /** Runs the entry's statement once on the worker's connection under an allowlist holding that entry (its plan taken on the planner's), and reports what the witness says. */
-    function watch(entry: Omit<AllowedStatement, 'plan'> & { params: unknown[]; runSql?: string }, options: Partial<WatchOptions> = {}, extraSchema = '') {
-      const { planner, worker } = connections(extraSchema);
-      const { params, runSql, ...allowed } = entry;
-      const witness = watchMainThreadStatements([{ ...allowed, plan: { database: planner, params } }], { ...BUDGET, ...options });
-      // EXECUTION: the statement ran (it was recorded), so the verdict is about a statement that was made.
-      worker.prepare(runSql ?? entry.sql).all(...params as never[]);
+  describe('the helper itself', () => {
+    const connection = () => {
+      const database = instrumentSlowQueries(new Database(':memory:'));
+      database.exec('CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, team INTEGER); CREATE INDEX people_name ON people (name)');
+      return database;
+    };
+
+    it('fails when a statement that really costs time runs over a positive budget (and stays quiet for one inside it)', () => {
+      const database = connection();
+      const witness = watchMainThreadStatements({ maxSqlMs: PROBE_BUDGET_MS });
+      const answered = database.prepare(COSTLY_STATEMENT).get();
       const main = witness.finish();
-      planner.close(); worker.close();
-      return main;
-    }
-    const drift = (sql: string, pinned: string[], now: string[]) => `plan drifted from the pinned one (pinned: [${pinned.join('; ')}], now: [${now.join('; ')}]): ${sql}`;
-
-    it('accepts a statement whose plan equals the pinned one, a plain INSERT ... VALUES with no trigger on its table, and reports their plans', () => {
-      const byId = watch({ sql: BY_ID, reason: 'test', expectedPlan: PK_EQUALITY, params: [1] });
-      expect(byId.unexpected).toEqual([]);
-      expect(byId.seen).toEqual([{ sql: BY_ID, count: 2 }]);
-      expect(byId.plans).toEqual([{ sql: BY_ID, steps: PK_EQUALITY }]);
-      const byKey = watch({ sql: 'SELECT at FROM reviews WHERE request_id = ? AND fingerprint = ?', reason: 'test', expectedPlan: KEY_EQUALITY, params: ['r1', 'f1'] });
-      expect(byKey.unexpected).toEqual([]);
-      const byLabel = watch({ sql: 'SELECT id FROM tags WHERE label = ?', reason: 'test', expectedPlan: ['SEARCH tags USING COVERING INDEX sqlite_autoindex_tags_1 (label=?)'], params: ['l1'] });
-      expect(byLabel.unexpected).toEqual([]);
-      const insert = watch({ sql: INSERT, reason: 'test', expectedPlan: [], writesTables: ['people'], params: [5000, 'x', 1] });
-      expect(insert.unexpected).toEqual([]);
-      expect(insert.plans).toEqual([{ sql: INSERT, steps: [] }]);
+      // EXECUTION: the recursion ran to its end, the statement was recorded, and its time was added up: a dead accumulator reads 0 and passes the budget.
+      expect(answered).toEqual({ n: 3_000_000 });
+      expect(main.total).toBe(2);
+      expect(main.sqlMs).toBeGreaterThan(PROBE_BUDGET_MS);
+      expect(main.problem).toMatch(new RegExp(`took .* ms on this thread, over the ${PROBE_BUDGET_MS} ms budget`));
+      // The same statement inside a budget it fits is no problem.
+      const roomy = watchMainThreadStatements({ maxSqlMs: main.sqlMs * 100 });
+      database.prepare(COSTLY_STATEMENT).get();
+      expect(roomy.finish().problem).toBeNull();
+      database.close();
     });
 
-    it('fails a range read whose text hides the range: a trailing comment, a block comment, a quoted alias', () => {
-      // Each text carries an `id = ?` that a reader of the SQL (or a regex over it) would take for the binding; only the plan says what is read.
-      const RANGE_PLAN = ['SEARCH people USING INTEGER PRIMARY KEY (rowid>?)'];
-      for (const sql of [
-        'SELECT name FROM people WHERE id > ? -- AND id = ?',
-        'SELECT name FROM people WHERE id > ? /* AND id = ? */',
-        'SELECT name AS "WHERE id = ?" FROM people WHERE id > ?',
-      ]) {
-        const main = watch({ sql, reason: 'test', expectedPlan: PK_EQUALITY, params: [0] });
-        // EXECUTION: the entry was planned (a range SEARCH of the key: 1000 rows read) and the pinned equality is not what it got.
-        expect(main.plans).toEqual([{ sql: summarizeSql(sql), steps: RANGE_PLAN }]);
-        expect(main.unexpected).toEqual([drift(summarizeSql(sql), PK_EQUALITY, RANGE_PLAN)]);
-      }
-    });
-
-    it('fails a CTE range, a BETWEEN and a scan, however small the table, when the pinned plan is a point read', () => {
-      const CTE = 'WITH p AS (SELECT * FROM people) SELECT name FROM p WHERE id > ?';
-      expect(watch({ sql: CTE, reason: 'test', expectedPlan: PK_EQUALITY, params: [0] }).unexpected)
-        .toEqual([drift(CTE, PK_EQUALITY, ['SEARCH people USING INTEGER PRIMARY KEY (rowid>?)'])]);
-      const BETWEEN = 'SELECT name FROM people WHERE id BETWEEN ? AND ?';
-      expect(watch({ sql: BETWEEN, reason: 'test', expectedPlan: PK_EQUALITY, params: [1, 5] }).unexpected)
-        .toEqual([drift(BETWEEN, PK_EQUALITY, ['SEARCH people USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)'])]);
-      const HOT = '/* hot */ SELECT name FROM people WHERE team = ?';
-      expect(watch({ sql: HOT, reason: 'test', expectedPlan: PK_EQUALITY, params: [1] }).unexpected).toEqual([drift(summarizeSql(HOT), PK_EQUALITY, ['SCAN people'])]);
-    });
-
-    it('fails an equality on a NON-unique index when the pinned plan is the primary-key point read', () => {
-      const BY_NAME = 'SELECT id FROM people WHERE name = ?';
-      const main = watch({ sql: BY_NAME, reason: 'test', expectedPlan: PK_EQUALITY, params: ['n1'] });
-      // The plan does SEARCH an index with an equality, one it is not: 100 rows match.
-      expect(main.plans[0].steps[0]).toMatch(/^SEARCH people USING (COVERING )?INDEX people_name \(name=\?\)$/);
-      expect(main.unexpected).toEqual([drift(BY_NAME, PK_EQUALITY, main.plans[0].steps)]);
-    });
-
-    it('fails a unique composite index read by a prefix, a range on its last column, or the last column alone', () => {
-      const probe = (sql: string, params: unknown[]) => watch({ sql, reason: 'test', expectedPlan: KEY_EQUALITY, params }).unexpected;
-      for (const [sql, params] of [
-        ['SELECT at FROM reviews WHERE request_id = ?', ['r1']],
-        ['SELECT at FROM reviews WHERE request_id = ? AND fingerprint > ?', ['r1', 'a']],
-        ['SELECT at FROM reviews WHERE fingerprint = ?', ['f1']],
-        ['SELECT at FROM reviews WHERE request_id = ? OR fingerprint = ?', ['r1', 'f2']],
-      ] as Array<[string, unknown[]]>) expect(probe(sql, params)).toEqual([expect.stringContaining('plan drifted from the pinned one')]);
-    });
-
-    it('fails when the plan drifts after the entry was approved: the index it pinned is gone', () => {
-      const BY_NAME = 'SELECT id FROM people WHERE name = ?';
-      const { planner, worker } = connections();
-      const pinned = planSteps(planner, BY_NAME, ['n1']);
-      expect(pinned[0]).toMatch(/INDEX people_name \(name=\?\)$/);
-      planner.exec('DROP INDEX people_name');
-      const witness = watchMainThreadStatements([{ sql: BY_NAME, reason: 'test', expectedPlan: pinned, plan: { database: planner, params: ['n1'] } }], BUDGET);
-      worker.prepare(BY_NAME).get('n1');
-      expect(witness.finish().unexpected).toEqual([drift(BY_NAME, pinned, ['SCAN people'])]);
-      planner.close(); worker.close();
-    });
-
-    it('fails an empty-plan entry whose table holds a trigger: the body is work the plan does not show', () => {
-      const TRIGGER = 'CREATE TRIGGER people_after AFTER INSERT ON people BEGIN DELETE FROM tags WHERE id < 500; END';
-      const main = watch({ sql: INSERT, reason: 'test', expectedPlan: [], writesTables: ['people'], params: [5000, 'x', 1] }, {}, TRIGGER);
-      expect(main.unexpected).toEqual([
-        `table people has trigger people_after, whose body this plan does not show: ${INSERT}`,
-        expect.stringContaining('not a bare single-row insert'),
-      ]);
-      // A TEMP trigger is a trigger too.
-      const temp = watch({ sql: INSERT, reason: 'test', expectedPlan: [], writesTables: ['people'], params: [5000, 'x', 1] }, {}, 'CREATE TEMP TRIGGER people_temp AFTER INSERT ON people BEGIN DELETE FROM tags; END');
-      expect(temp.unexpected[0]).toBe(`table people has trigger people_temp, whose body this plan does not show: ${INSERT}`);
-    });
-
-    it('fails an empty-plan entry that is a PRAGMA, a DELETE without WHERE, or names no table it writes', () => {
-      for (const [sql, params] of [['PRAGMA user_version', []], ['PRAGMA user_version = 7', []], ['DELETE FROM tags', []], ['VACUUM', []]] as Array<[string, unknown[]]>) {
-        const main = watch({ sql, reason: 'test', expectedPlan: [], writesTables: ['tags'], params, runSql: sql === 'VACUUM' ? 'SELECT 1' : sql }, { maxAllowedMs: 1000 });
-        expect(main.unexpected.some(line => line.startsWith('empty plan, but the statement is not a bare single-row insert')), sql).toBe(true);
-      }
-      const noTable = watch({ sql: INSERT, reason: 'test', expectedPlan: [], params: [5000, 'x', 1] });
-      expect(noTable.unexpected).toEqual([`allowlisted statement has an empty plan and names no table it writes (writesTables): ${INSERT}`]);
-    });
-
-    it('fails an entry with no pinned plan, no plan database, or text too long to be matched exactly', () => {
-      const { planner, worker } = connections();
-      const noPin = watchMainThreadStatements([{ sql: BY_ID, reason: 'test', plan: { database: planner, params: [1] } } as unknown as AllowedStatement], BUDGET);
-      worker.prepare(BY_ID).get(1);
-      expect(noPin.finish().unexpected).toEqual([`allowlisted statement pins no expected plan: ${BY_ID}`]);
-      const noDatabase = watchMainThreadStatements([{ sql: BY_ID, reason: 'test', expectedPlan: PK_EQUALITY } as unknown as AllowedStatement], BUDGET);
-      worker.prepare(BY_ID).get(1);
-      expect(noDatabase.finish().unexpected).toEqual([`allowlisted statement has no query plan database: ${BY_ID}`]);
-      const LONG = `SELECT /* ${'x'.repeat(300)} */ name FROM people WHERE id = ?`;
-      const tooLong = watchMainThreadStatements([{ sql: LONG, reason: 'test', expectedPlan: PK_EQUALITY, plan: { database: planner, params: [1] } }], BUDGET);
-      worker.prepare(LONG).get(1);
-      expect(tooLong.finish().unexpected).toEqual([expect.stringContaining('too long to match exactly')]);
-      planner.close(); worker.close();
+    it('fails when the report cannot name every statement (a fourth distinct text)', () => {
+      const database = connection();
+      const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+      for (const column of ['id', 'name', 'team', 'rowid']) database.prepare(`SELECT ${column} FROM people`).all();
+      const main = witness.finish();
+      expect(main.total).toBe(8);
+      expect(main.seen.length).toBe(3);
+      expect(main.problem).toMatch(/2 more statements than the report itemises/);
+      database.close();
     });
 
     it('refuses to start without a time budget: none, undefined or not a number', () => {
-      for (const options of [undefined, {}, { maxAllowedMs: undefined }, { maxAllowedMs: Number.NaN }, { maxAllowedMs: '5' }]) {
-        expect(() => watchMainThreadStatements([], options as unknown as WatchOptions), JSON.stringify(options)).toThrow(/maxAllowedMs/);
+      for (const options of [undefined, {}, { maxSqlMs: undefined }, { maxSqlMs: Number.NaN }, { maxSqlMs: '5' }]) {
+        expect(() => watchMainThreadStatements(options as never), JSON.stringify(options)).toThrow(/maxSqlMs/);
       }
     });
 
-    it('fails a write that scans, and a statement SQLite cannot plan', () => {
-      const COPY = "INSERT INTO tags (id, label) SELECT id + 5000, label || 'x' FROM tags";
-      const copy = watch({ sql: COPY, reason: 'test', expectedPlan: [], writesTables: ['tags'], params: [] });
-      expect(copy.unexpected).toEqual([expect.stringContaining('plan drifted from the pinned one (pinned: [], now: [SCAN')]);
-      const BROKEN = 'SELECT FROM WHERE';
-      const { planner, worker } = connections();
-      const broken = watchMainThreadStatements([{ sql: BROKEN, reason: 'test', expectedPlan: [], plan: { database: planner, params: [] } }], BUDGET);
-      expect(() => worker.prepare(BROKEN)).toThrow();
-      expect(broken.finish().unexpected).toEqual([expect.stringContaining('allowlisted statement cannot be planned (')]);
-      planner.close(); worker.close();
+    it('refuses to report when its statement window was replaced during the watch', () => {
+      const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
+      openStatementWindow(1000).close();
+      expect(() => witness.finish()).toThrow(/canary/);
     });
 
-    it('counts a write toward the time budget as well as a read (every entry counts, also one whose plan has no step)', () => {
-      const { planner, worker } = connections();
-      const witness = watchMainThreadStatements([{ sql: INSERT, reason: 'test', expectedPlan: [], writesTables: ['people'], plan: { database: planner, params: [5000, 'x', 1] } }], { maxAllowedMs: 0 });
-      // Busy time is recorded in whole milliseconds: enough plain inserts that their sum rounds to at least one.
-      const insert = worker.prepare(INSERT);
-      for (let id = 5000; id < 45000; id++) insert.run(id, 'x', 1);
-      const main = witness.finish();
-      // EXECUTION: the writes ran and were timed, and the entry's plan has no step, so only a count of every allowlisted statement sees them.
-      expect(main.plans).toEqual([{ sql: INSERT, steps: [] }]);
-      expect(main.allowedMs).toBeGreaterThan(0);
-      expect(main.unexpected).toEqual([expect.stringMatching(/allowlisted statements took .* ms on this thread, over the 0 ms budget/)]);
-      planner.close(); worker.close();
+    it('sees a plan change: the pinned plan stops matching after the index it used is dropped', () => {
+      const database = connection();
+      const BY_NAME = 'SELECT id FROM people WHERE name = ?';
+      const pinned = explainOn(database, BY_NAME, ['n1']);
+      expect(pinned).toEqual(['SEARCH people USING COVERING INDEX people_name (name=?)']);
+      database.exec('DROP INDEX people_name');
+      expect(explainOn(database, BY_NAME, ['n1'])).toEqual(['SCAN people']);
+      database.close();
     });
 
-    it('fails when the reads add up to more than the budget', () => {
-      const main = watch({ sql: BY_ID, reason: 'test', expectedPlan: PK_EQUALITY, params: [1] }, { maxAllowedMs: -1 });
-      expect(main.unexpected).toEqual([expect.stringMatching(/allowlisted statements took .* ms on this thread, over the -1 ms budget/)]);
+    it('sees a review read that drifts from the pinned plan on the store\'s own connection (the primary-key column left out of the filter)', () => {
+      const store = new LocalReviewStore(':memory:');
+      try {
+        const handle = reviewHandle(store);
+        expect(explainOn(handle, REVIEW_READ_SQL, ['r', 'f'])).toEqual(REVIEW_READ_PLAN);
+        const drifted = explainOn(handle, 'SELECT checked_at_epoch FROM work_view_reviews WHERE content_fingerprint = ?', ['f']);
+        expect(drifted).toEqual(['SCAN work_view_reviews']);
+        expect(drifted).not.toEqual(REVIEW_READ_PLAN);
+      } finally { store.close(); }
     });
 
-    it('names a statement that is not on the allowlist, and one that differs from an entry by a single character', () => {
-      const { planner, worker } = connections();
-      const witness = watchMainThreadStatements([{ sql: BY_ID, reason: 'test', expectedPlan: PK_EQUALITY, plan: { database: planner, params: [1] } }], BUDGET);
-      worker.prepare(BY_ID).get(1);
-      worker.prepare('SELECT name FROM people WHERE name = ?').get('x');
-      worker.prepare('SELECT name FROM people WHERE id = ?;').get(1);
-      // The order the witness lists them in is not part of its contract; both statements must be named.
-      expect([...witness.finish().unexpected].sort()).toEqual(['SELECT name FROM people WHERE id = ?;', 'SELECT name FROM people WHERE name = ?']);
-      planner.close(); worker.close();
+    it('records the statements of the connection it explains on, so an EXPLAIN taken inside a watch is itself listed', () => {
+      const store = new LocalReviewStore(':memory:');
+      try {
+        const handle = reviewHandle(store);
+        const witness = watchMainThreadStatements({ maxSqlMs: 1000 });
+        store.read('r', 'f');
+        explainOn(handle, REVIEW_READ_SQL, ['r', 'f']);
+        const main = witness.finish();
+        // EXECUTION: the store's handle is an instrumented connection: its read and the EXPLAIN taken on it were both recorded.
+        expect(main.seen.map(entry => entry.sql).sort()).toEqual([`EXPLAIN QUERY PLAN ${REVIEW_READ_SQL}`, REVIEW_READ_SQL].sort());
+      } finally { store.close(); }
     });
   });
 
-  it('the witness refuses to report when its statement window was replaced during the watch', () => {
-    const witness = watchMainThreadStatements([], { maxAllowedMs: ALLOWED_BUDGET_MS });
-    openStatementWindow(1000).close();
-    expect(() => witness.finish()).toThrow(/canary/);
+  describe('(4) the tables the two statements touch have no trigger after migrations', () => {
+    it('work_state_entries (SessionStore migrations) and work_view_reviews (LocalReviewStore) hold none, and the query does see triggers that exist', () => {
+      const sessions = new SessionStore(':memory:');
+      // The worker's own schema setup: the search layer adds the FTS triggers on observations and session_summaries.
+      new SessionSearch(sessions.db);
+      const reviews = new LocalReviewStore(':memory:');
+      try {
+        const reviewDatabase = reviewHandle(reviews);
+        const tables = (database: Database) => (database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name);
+        // EXECUTION: the migrations ran (both tables exist), and the query finds the triggers the schema does have (the observations FTS ones).
+        expect(tables(sessions.db)).toContain('work_state_entries');
+        expect(tables(reviewDatabase)).toContain('work_view_reviews');
+        expect(triggersOn(sessions.db, ['observations']).length).toBeGreaterThan(0);
+        expect(triggersOn(sessions.db, ['work_state_entries'])).toEqual([]);
+        expect(triggersOn(reviewDatabase, ['work_view_reviews'])).toEqual([]);
+        // MUTATION: a trigger added to either table, main or temp, is found.
+        sessions.db.exec('CREATE TRIGGER work_state_entries_after AFTER INSERT ON work_state_entries BEGIN SELECT 1; END');
+        reviewDatabase.exec('CREATE TEMP TRIGGER reviews_temp AFTER INSERT ON work_view_reviews BEGIN SELECT 1; END');
+        expect(triggersOn(sessions.db, ['work_state_entries'])).toEqual(['work_state_entries.work_state_entries_after']);
+        expect(triggersOn(reviewDatabase, ['work_view_reviews'])).toEqual(['work_view_reviews.reviews_temp']);
+      } finally { sessions.close(); reviews.close(); }
+    });
   });
 
   it('the witness fails when the same run happens on the main thread', async () => {
-    const witness = watchMainThreadStatements(mainThreadAllowed(), { maxAllowedMs: ALLOWED_BUDGET_MS });
+    const witness = watchMainThreadStatements({ maxSqlMs: TOTAL_SQL_BUDGET_MS });
     const ledgerDir = join(directory, 'ledger');
     mkdirSync(ledgerDir, { recursive: true });
     const task = buildRefreshTask({
@@ -539,7 +555,7 @@ describe('a refresh run through WorkViewRoutes', () => {
     await task.run(async prompt => answerFor(prompt), 'claude-code');
     const main = witness.finish();
     expect(main.total).toBeGreaterThan(0);
-    expect(main.unexpected.some(sql => sql.startsWith('SELECT'))).toBe(true);
+    expect(offList(main).some(sql => sql.startsWith('SELECT'))).toBe(true);
   });
 });
 

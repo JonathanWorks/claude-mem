@@ -815,6 +815,11 @@ export class CloudSync {
     }
   }
 
+  /** This device's id, or '' when sync is off or id resolution failed closed. Configuration, not a count: runs no SQL (status() runs several). */
+  localDeviceId(): string {
+    return this.deviceId;
+  }
+
   status(): CloudSyncStatus {
     return {
       configured: this.isConfigured(),

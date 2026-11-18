@@ -15,7 +15,7 @@ let origin: string;
 const controllers: AbortController[] = [];
 
 async function start(setupScan: SetupScan | null) {
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath: join(FIXTURE_HOME, 'no-work-state.db'), reviewPath: ':memory:', pollIntervalMs: 20,
     humanCopy: null, ledgerDir: null, setupScan,
   });

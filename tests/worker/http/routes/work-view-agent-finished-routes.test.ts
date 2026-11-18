@@ -34,7 +34,7 @@ beforeEach(async () => {
     JSON.stringify({ description: 'Build install funnel phases 4-11' }), JSON.stringify({ isAsync: true, status: 'async_launched', agentId: SUB }), now - 3_000_000);
   source.prepare('INSERT INTO observations VALUES (1, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)').run('repo', 'memory-parent', 'parent-session', SUB, 'general-purpose', 'Captured a Reveal screenshot', 'change', now - 2_000_000);
   nextId = 1;
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: join(directory, 'work-view'),
     homeProject: 'home', rulesFilePath: join(directory, 'MY-RULES.md'), claudeInstructionsPath: join(directory, 'CLAUDE.md'),
     appendWorkStateEntry: ({ project, listName, fields }) => {

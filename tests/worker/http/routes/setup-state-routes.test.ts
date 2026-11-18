@@ -19,7 +19,7 @@ let routes: WorkViewRoutes;
 let origin: string;
 
 async function start(autoRefresh: unknown = null) {
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath: join(FIXTURE_HOME, 'no-work-state.db'), reviewPath: ':memory:', pollIntervalMs: 20,
     humanCopy: null, ledgerDir: null, setupScan: null, setupStatePath: statePath, settingsPath, autoRefresh: autoRefresh as never,
   });

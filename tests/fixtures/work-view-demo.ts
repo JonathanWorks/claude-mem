@@ -67,7 +67,7 @@ if (updateIndex !== -1) {
   console.log(`Appended a real fixture update to ${example.id}.`);
 } else {
   db.close();
-  const routes = new WorkViewRoutes({ databasePath, reviewPath, ledgerDir: null });
+  const routes = new WorkViewRoutes({ getCloudSync: () => null, databasePath, reviewPath, ledgerDir: null });
   const app = express();
   app.use(express.json());
   routes.setupRoutes(app);

@@ -586,7 +586,8 @@ export class WorkerService implements WorkerRef {
     this.workViewRoutes = new WorkViewRoutes({
       // The work view's scans run on a thread of their own, never on this one.
       execution: 'worker',
-      getLocalDeviceId: () => this.dbManager.getCloudSync()?.status().deviceId ?? '',
+      // The routes read the device id from this source through localDeviceId() (configuration, no SQL); they cannot reach status().
+      getCloudSync: () => this.dbManager.getCloudSync(),
       // My Rules saves as work-state rows, so a rule change syncs like any other write.
       appendWorkStateEntry: (entry) => {
         this.dbManager.getSessionStore().appendWorkStateEntry(entry);

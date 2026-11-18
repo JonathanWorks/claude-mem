@@ -68,7 +68,7 @@ class FakeWorker {
 }
 
 async function listen(options: ConstructorParameters<typeof WorkViewRoutes>[0] = {}): Promise<WorkViewRoutes> {
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, ledgerDir: null,
     setupStatePath: join(directory, 'setup-state.json'), rulesFilePath: join(directory, 'MY-RULES.md'),
     claudeInstructionsPath: join(directory, 'CLAUDE.md'), homeProject: 'home', ...options,

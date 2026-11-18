@@ -371,7 +371,7 @@ describe('what the main thread pays for a ledger change', () => {
       { kind: 'progress', now: NOW, answer: { groupId: id, state: 'in-progress', percent: 90, summary: 'Nearly done.', reviewBasis: { checkedThrough: new Date(NOW).toISOString(), conversations: [anchor] } } },
       { kind: 'story', now: NOW, validated: { narrative: 'Under way.', preferences: [] } },
     ];
-    const witness = watchMainThreadStatements([], { maxAllowedMs: 0 });
+    const witness = watchMainThreadStatements({ maxSqlMs: 0 });
     const timings = new Map<string, number>();
     const replies: unknown[] = [];
     for (const op of ops) {
@@ -383,7 +383,8 @@ describe('what the main thread pays for a ledger change', () => {
     // EXECUTION: every change was applied (done), and the watch was live (its canary was seen), so zero statements means none ran.
     expect(replies.every(reply => 'done' in (reply as object))).toBe(true);
     expect(main.total).toBe(0);
-    expect(main.unexpected).toEqual([]);
+    expect(main.seen).toEqual([]);
+    expect(main.problem).toBeNull();
     for (const [kind, ms] of timings) expect({ kind, ms: ms < BUDGET_MS }).toEqual({ kind, ms: true });
     expect(readLedger(ledgerDir).progress[id]).toMatchObject({ state: 'in-progress', percent: 90 });
   });

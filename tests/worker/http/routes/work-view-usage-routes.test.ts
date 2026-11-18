@@ -32,7 +32,7 @@ beforeEach(async () => {
   const source = new Database(databasePath);
   source.exec('CREATE TABLE work_state_entries (id INTEGER PRIMARY KEY, project TEXT, list_name TEXT, fields TEXT, created_at_epoch INTEGER)');
   source.close();
-  routes = new WorkViewRoutes({ databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: null, setupStatePath: join(directory, 'setup-state.json') });
+  routes = new WorkViewRoutes({ getCloudSync: () => null, databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: null, setupStatePath: join(directory, 'setup-state.json') });
   const app = express();
   app.use(express.json());
   routes.setupRoutes(app);

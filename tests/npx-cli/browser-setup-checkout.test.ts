@@ -26,7 +26,7 @@ afterEach(async () => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 async function start() {
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath: join(FIXTURE_HOME, 'no-work-state.db'), reviewPath: ':memory:', pollIntervalMs: 20,
     humanCopy: null, ledgerDir: null, setupScan: null, setupStatePath: statePath, settingsPath: join(dir, 'settings.json'),
   });

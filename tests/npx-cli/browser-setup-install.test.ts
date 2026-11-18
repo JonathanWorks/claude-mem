@@ -122,7 +122,7 @@ const extraction = {
 };
 async function startFixtureWorker(): Promise<void> {
   if (worker) return;
-  const routes = new WorkViewRoutes({
+  const routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath: join(import.meta.dir, '..', 'fixtures', 'prompt-import', 'home', 'no-work-state.db'),
     reviewPath: ':memory:', humanCopy: null, ledgerDir: null, setupScan: null, setupStatePath: statePath, settingsPath,
     autoRefresh: extraction as never,

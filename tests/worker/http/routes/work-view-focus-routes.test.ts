@@ -55,7 +55,7 @@ beforeEach(async () => {
   insertRow(suggestedArea('fa_community', 'Community', 3), { at: now - 3000 });
   const ledgerDir = join(directory, 'work-view');
   mkdirSync(ledgerDir);
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir,
     homeProject: 'home', rulesFilePath: join(directory, 'MY-RULES.md'), claudeInstructionsPath: join(directory, 'claude', 'CLAUDE.md'),
     appendWorkStateEntry: ({ project, listName, fields }) => {
@@ -360,7 +360,7 @@ describe('My Focus routes', () => {
   it('is unavailable without a work-state writer', async () => {
     routes.close();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    routes = new WorkViewRoutes({ databasePath: join(directory, 'source.db'), reviewPath: join(directory, 'review2.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: null, homeProject: 'home', rulesFilePath: join(directory, 'MY-RULES.md'), claudeInstructionsPath: join(directory, 'claude', 'CLAUDE.md') });
+    routes = new WorkViewRoutes({ getCloudSync: () => null, databasePath: join(directory, 'source.db'), reviewPath: join(directory, 'review2.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: null, homeProject: 'home', rulesFilePath: join(directory, 'MY-RULES.md'), claudeInstructionsPath: join(directory, 'claude', 'CLAUDE.md') });
     const app = express();
     app.use(express.json());
     routes.setupRoutes(app);
@@ -396,7 +396,7 @@ describe('My Focus rows pulled through cloud sync', () => {
     expect(result.applied).toBe(2);
     const syncRoutes = new WorkViewRoutes({
       databasePath, reviewPath: join(syncDirectory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir: null,
-      getLocalDeviceId: () => 'desktop', homeProject: 'home', rulesFilePath: join(syncDirectory, 'MY-RULES.md'), claudeInstructionsPath: join(syncDirectory, 'claude', 'CLAUDE.md'),
+      getCloudSync: () => ({ localDeviceId: () => 'desktop' }), homeProject: 'home', rulesFilePath: join(syncDirectory, 'MY-RULES.md'), claudeInstructionsPath: join(syncDirectory, 'claude', 'CLAUDE.md'),
     });
     const app = express();
     app.use(express.json());

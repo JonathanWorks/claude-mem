@@ -43,6 +43,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { captureEvent } from '../../../telemetry/telemetry.js';
 import { isForeignLoopbackBrowserWrite } from './SettingsRoutes.js';
 import { validateBody } from '../middleware/validateBody.js';
+import type { CloudSync } from '../../../sync/CloudSync.js';
 import type { SetupScan, SetupScanState } from '../../../prompt-import/setup-scan.js';
 import { readHistoryCounts, type HistoryImport } from '../../../setup/history-import.js';
 import { hasActiveSetupSession, hasProConfiguration, readSetupState, setupStatePath, writeSetupState, type SetupStateFile, type SetupStateView } from '../../../../shared/setup-state.js';
@@ -235,7 +236,13 @@ interface WorkViewOptions {
   databasePath?: string;
   reviewPath?: string;
   pollIntervalMs?: number;
-  getLocalDeviceId?: () => string;
+  /**
+   * The sync source the device id is read from. The routes read it through CloudSync.localDeviceId() (configuration, no SQL),
+   * never through status(), whose COUNT(*) queries would run on the main thread per publish and refresh. A source that offers
+   * only localDeviceId() keeps that true by its type. Required, so a caller that drops the wiring is a type error: a caller with no
+   * sync passes `() => null` (no device id).
+   */
+  getCloudSync: () => Pick<CloudSync, 'localDeviceId'> | null;
   humanCopy?: HumanCopyWorker | null;
   /** Runs owner-goals and request-progress when something is due. Omitted: on for the default ledger only. */
   autoRefresh?: AutoRefreshWorker | null;
@@ -437,7 +444,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
   private signature = '';
   private closed = false;
   private pollIntervalMs: number;
-  private getLocalDeviceId: () => string;
+  private getCloudSync: () => Pick<CloudSync, 'localDeviceId'> | null;
   private humanCopy: HumanCopyWorker | null;
   private autoRefresh: AutoRefreshWorker | null;
   private appendWorkStateEntry: ((entry: WorkStateWrite) => void) | null;
@@ -455,10 +462,10 @@ export class WorkViewRoutes extends BaseRouteHandler {
   private unsubscribeHistoryImport: (() => void) | null = null;
   private hostedIntent: Pick<HostedIntent, 'run' | 'state'> | null;
 
-  constructor(options: WorkViewOptions = {}) {
+  constructor(options: WorkViewOptions) {
     super();
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
-    this.getLocalDeviceId = options.getLocalDeviceId ?? (() => '');
+    this.getCloudSync = options.getCloudSync;
     const ledgerDir = options.ledgerDir === undefined ? join(DATA_DIR, 'work-view') : options.ledgerDir;
     this.ledgerDir = ledgerDir;
     this.databasePath = options.databasePath ?? DB_PATH;
@@ -481,7 +488,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     // A test or demo with its own ledger never starts an agent unless it passes one in.
     this.autoRefresh = options.autoRefresh === undefined
       ? (options.ledgerDir === undefined && ledgerDir ? defaultAutoRefresh(ledgerDir, options.settingsPath, options.setupStatePath,
-        () => this.setupIsActive(), () => this.getLocalDeviceId(), body => this.recordRouterFocus(body),
+        () => this.setupIsActive(), () => this.localDeviceId(), body => this.recordRouterFocus(body),
         this.refreshScans(ledgerDir), { writeLedger: op => this.recordLedgerWrite(op), ...options.autoRefreshPlace, databasePath: this.databasePath }) : null)
       : options.autoRefresh;
     this.appendWorkStateEntry = options.appendWorkStateEntry ?? null;
@@ -509,6 +516,10 @@ export class WorkViewRoutes extends BaseRouteHandler {
 
   private stopRulesSync: () => void;
   private rulesRebuildScheduled = false;
+
+  private localDeviceId(): string {
+    return this.getCloudSync()?.localDeviceId() ?? '';
+  }
 
   private setupIsActive(): boolean {
     const statePath = this.setupStatePath ?? setupStatePath();
@@ -749,12 +760,12 @@ export class WorkViewRoutes extends BaseRouteHandler {
 
   /** The refresh's needs scan, run through the reader so it leaves the main thread whenever the reads do. */
   private refreshScans(ledgerDir: string): RefreshScans {
-    return { needs: () => this.reader.refreshNeeds({ ledgerDir, databasePath: this.databasePath, localDeviceId: this.getLocalDeviceId(), now: Date.now() }) };
+    return { needs: () => this.reader.refreshNeeds({ ledgerDir, databasePath: this.databasePath, localDeviceId: this.localDeviceId(), now: Date.now() }) };
   }
 
   private readInput(): WorkViewReadInput {
     return {
-      databasePath: this.databasePath, ledgerDir: this.ledgerDir, localDeviceId: this.getLocalDeviceId(),
+      databasePath: this.databasePath, ledgerDir: this.ledgerDir, localDeviceId: this.localDeviceId(),
       pollIntervalMs: this.pollIntervalMs, activityRefreshMs: this.activityRefreshMs,
     };
   }
@@ -1088,7 +1099,7 @@ export class WorkViewRoutes extends BaseRouteHandler {
     const database = openSqliteDatabase(this.databasePath, { readonly: true, create: false });
     let planned: ReturnType<typeof seedFocusRows> | ReturnType<typeof seedUndoRows>;
     try {
-      const focus = readFocus(database, { localDeviceId: this.getLocalDeviceId() });
+      const focus = readFocus(database, { localDeviceId: this.localDeviceId() });
       planned = body.action === 'apply' ? seedFocusRows(body, focus) : seedUndoRows(body, focus);
     } catch (error) {
       if (error instanceof TypeError || error instanceof RangeError) { this.badRequest(res, error.message); return; }

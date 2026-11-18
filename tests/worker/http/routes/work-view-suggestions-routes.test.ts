@@ -57,7 +57,7 @@ beforeEach(async () => {
     ignored: {},
     suggestions: { [C]: { requestId: RELEASE_CARDS, confidence: 0.63, evidence: EVIDENCE, judge: 'jev', at: new Date(now).toISOString(), status: 'open' } },
   }));
-  routes = new WorkViewRoutes({ databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir, setupStatePath: join(directory, 'setup-state.json') });
+  routes = new WorkViewRoutes({ getCloudSync: () => null, databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir, setupStatePath: join(directory, 'setup-state.json') });
   const app = express();
   app.use(express.json());
   routes.setupRoutes(app);

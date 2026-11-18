@@ -36,7 +36,7 @@ beforeEach(async () => {
   }));
   rulesFilePath = join(directory, 'MY-RULES.md');
   claudeInstructionsPath = join(directory, 'claude', 'CLAUDE.md');
-  routes = new WorkViewRoutes({
+  routes = new WorkViewRoutes({ getCloudSync: () => null,
     databasePath, reviewPath: join(directory, 'review.db'), pollIntervalMs: 20, humanCopy: null, ledgerDir,
     homeProject: 'home', rulesFilePath, claudeInstructionsPath,
     appendWorkStateEntry: ({ project, listName, fields }) => {
